@@ -395,8 +395,6 @@ const firebaseConfig = {
   appId: "1:497336302623:web:dc1ecc8ddef6c2c5f2692a",
   measurementId: "G-SCQF6Z1F5R"
 };
-
-// Initialize Firebase
 firebase.initializeApp(firebaseConfig);
 const fsdb = firebase.firestore();
 
@@ -1134,8 +1132,67 @@ function iconTrash(){return `<svg viewBox="0 0 24 24" fill="none" stroke="curren
 function iconBox(){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 8l-9-5-9 5 9 5 9-5zM3 8v8l9 5M21 8v8l-9 5M12 13v8"/></svg>`;}
 function iconConvert(){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17 3l4 4-4 4M3 11V9a4 4 0 014-4h14M7 21l-4-4 4-4M21 13v2a4 4 0 01-4 4H3"/></svg>`;}
 
+function altUnitRowHtml(u, idx, baseUnit){
+  u = u || {name:'', unitsPerBase:'', price:''};
+  return `<div class="field-row alt-unit-row" data-idx="${idx}" style="align-items:flex-end">
+    <div class="field"><label>${idx===0?'Sell Also In (Unit)':''}</label>
+      <select class="au-name">${UNITS.map(o=>`<option ${u.name===o?'selected':''}>${esc(o)}</option>`).join('')}</select>
+    </div>
+    <div class="field"><label>${idx===0?`= how many per 1 ${esc(baseUnit)}?`:''}</label>
+      <input type="number" min="0.0001" step="any" class="au-perbase" value="${u.unitsPerBase||''}" placeholder="e.g. 20">
+    </div>
+    <div class="field"><label>${idx===0?'Price per unit (optional)':''}</label>
+      <input type="number" min="0" step="0.01" class="au-price" value="${u.price||''}" placeholder="auto if blank">
+    </div>
+    <button type="button" class="icon-btn au-remove" title="Remove">${iconTrash()}</button>
+  </div>`;
+}
+function renderAltUnitsBox(list, baseUnit){
+  list = list && list.length? list : [];
+  return `<div id="altUnitsRows">${list.map((u,i)=>altUnitRowHtml(u,i,baseUnit)).join('') || altUnitRowHtml(null,0,baseUnit)}</div>
+    <button type="button" class="btn btn-sm" id="addAltUnitBtn" style="margin-top:4px">＋ Add Another Selling Unit</button>`;
+}
+function wireAltUnitsEvents(){
+  const box = byId('altUnitsBox');
+  const baseUnitOf = ()=> byId('f_unit').value;
+  const reindex = ()=>{
+    box.querySelectorAll('.alt-unit-row').forEach((row,i)=>{
+      row.dataset.idx = i;
+      const l1 = row.children[0].querySelector('label'); if(l1) l1.textContent = i===0? 'Sell Also In (Unit)':'';
+      const l2 = row.children[1].querySelector('label'); if(l2) l2.textContent = i===0? `= how many per 1 ${esc(baseUnitOf())}?`:'';
+      const l3 = row.children[2].querySelector('label'); if(l3) l3.textContent = i===0? 'Price per unit (optional)':'';
+    });
+  };
+  byId('addAltUnitBtn').addEventListener('click', ()=>{
+    byId('altUnitsRows').insertAdjacentHTML('beforeend', altUnitRowHtml(null, box.querySelectorAll('.alt-unit-row').length, baseUnitOf()));
+    reindex();
+  });
+  box.addEventListener('click', (e)=>{
+    if(e.target.closest('.au-remove')){
+      const row = e.target.closest('.alt-unit-row');
+      const rows = box.querySelectorAll('.alt-unit-row');
+      if(rows.length<=1){ row.querySelectorAll('input').forEach(i=>i.value=''); return; }
+      row.remove();
+      reindex();
+    }
+  });
+  byId('f_unit').addEventListener('change', reindex);
+}
+function collectAltUnits(baseUnit){
+  const rows = document.querySelectorAll('#altUnitsBox .alt-unit-row');
+  const out = [];
+  rows.forEach(row=>{
+    const name = row.querySelector('.au-name').value;
+    const unitsPerBase = parseFloat(row.querySelector('.au-perbase').value)||0;
+    const price = row.querySelector('.au-price').value;
+    if(name && unitsPerBase>0 && name!==baseUnit){
+      out.push({name, unitsPerBase, price: price!==''? parseFloat(price)||0 : null});
+    }
+  });
+  return out;
+}
 function productFormHtml(p){
-  p = p || {name:'',category:CATEGORIES[0],sku:'',unit:UNITS[0],costPrice:'',sellingPrice:'',stockQty:'',reorderLevel:'',dimensions:'',notes:''};
+  p = p || {name:'',category:CATEGORIES[0],sku:'',unit:UNITS[0],costPrice:'',sellingPrice:'',stockQty:'',reorderLevel:'',dimensions:'',notes:'',altUnits:[]};
   return `
     <div class="field"><label>Product Name *</label><input type="text" id="f_name" value="${esc(p.name)}" placeholder="e.g. Dangote Cement 50kg Bag, 12mm Iron Rod"></div>
     <div class="field-row">
@@ -1155,18 +1212,24 @@ function productFormHtml(p){
       <div class="field"><label>Reorder Level</label><input type="number" step="0.01" min="0" id="f_reorder" value="${p.reorderLevel}"></div>
     </div>
     ${p.id? `<div class="hint">To change stock quantity, use the "Adjust Stock" action instead — it keeps an audit log.</div>` : ''}
+    <div class="field" style="margin-top:10px">
+      <label>Additional Selling Units <span class="hint" style="font-weight:400">(e.g. sell by the Piece even though it's stocked/supplied by the ${esc(p.unit)})</span></label>
+      <div id="altUnitsBox">${renderAltUnitsBox(p.altUnits, p.unit)}</div>
+    </div>
     <div class="field" style="margin-top:8px"><label>Notes</label><textarea id="f_notes" rows="2">${esc(p.notes)}</textarea></div>
   `;
 }
 function openAddProduct(){
   openModal('Add Product', productFormHtml(null),
     `<button class="btn" data-action="closeModal">Cancel</button><button class="btn btn-primary" id="saveProductBtn">Save Product</button>`);
+  wireAltUnitsEvents();
   byId('saveProductBtn').addEventListener('click', ()=>saveProduct(null));
 }
 function openEditProduct(id){
   const p = STATE.products.find(x=>x.id==id); if(!p) return;
   openModal('Edit Product', productFormHtml(p),
     `<button class="btn" data-action="closeModal">Cancel</button><button class="btn btn-primary" id="saveProductBtn">Save Changes</button>`);
+  wireAltUnitsEvents();
   byId('saveProductBtn').addEventListener('click', ()=>saveProduct(p));
 }
 async function saveProduct(existing){
@@ -1181,10 +1244,11 @@ async function saveProduct(existing){
   const reorderLevel = parseFloat(byId('f_reorder').value)||0;
   const notes = byId('f_notes').value.trim();
   if(!name){ toast('Product name is required','error'); return; }
+  const altUnits = collectAltUnits(unit);
   const now = new Date().toISOString();
   const rec = existing? {...existing} : {createdAt:now, branch: STATE.currentBranch};
   const priceChanged = existing && Number(existing.sellingPrice) !== sellingPrice;
-  Object.assign(rec, {name,category,unit,sku,dimensions,costPrice,sellingPrice,stockQty,reorderLevel,notes,updatedAt:now});
+  Object.assign(rec, {name,category,unit,sku,dimensions,costPrice,sellingPrice,stockQty,reorderLevel,notes,altUnits,updatedAt:now});
   const savedId = await putRec('products', rec);
   if(priceChanged){
     await putRec('priceHistory', {
@@ -2155,8 +2219,9 @@ async function authorizeReturn(id){
     const now = new Date().toISOString();
     for(const it of r.items){
       const p = STATE.products.find(pp=>pp.id==it.productId);
-      if(p){ p.stockQty = Number(p.stockQty)+Number(it.qty); p.updatedAt=now; await putRec('products', p); }
-      await putRec('stockLog', {productId:it.productId, productName:it.productName, type:'return-in', qty:it.qty, resultingStock: p? p.stockQty : null, reason:`Customer return — Invoice ${r.invoiceNo}`, date:now, branch:r.branch||'main'});
+      const baseQty = toBaseQty(p, it.unit||(p?p.unit:''), it.qty);
+      if(p){ p.stockQty = Number(p.stockQty)+baseQty; p.updatedAt=now; await putRec('products', p); }
+      await putRec('stockLog', {productId:it.productId, productName:it.productName, type:'return-in', qty:it.qty, resultingStock: p? p.stockQty : null, reason:`Customer return — Invoice ${r.invoiceNo} (${fmtNum(baseQty)} ${p?p.unit:''} restored)`, date:now, branch:r.branch||'main'});
     }
     const s = STATE.sales.find(x=>x.id==r.saleId);
     if(s){
@@ -2192,7 +2257,10 @@ async function rejectReturn(id){
 function openSaleBuilder(existingSale){
   STATE.saleDraft = {
     editingId: existingSale? existingSale.id : null,
-    items: existingSale? existingSale.items.map(it=>({id:uid(), productId:it.productId, qty:it.qty, unitPrice:it.unitPrice})) : [{id:uid(), productId:'', qty:1, unitPrice:0}],
+    items: existingSale? existingSale.items.map(it=>{
+      const p = STATE.products.find(x=>x.id==it.productId);
+      return {id:uid(), productId:it.productId, qty:it.qty, unitPrice:it.unitPrice, unit: it.unit || (p?p.unit:'')};
+    }) : [{id:uid(), productId:'', qty:1, unitPrice:0, unit:''}],
     orig: existingSale? existingSale : null,
     appliedDeposit: existingSale?.depositApplied || null
   };
@@ -2209,6 +2277,28 @@ function productOptions(selId){
   return `<option value="">Select product…</option>${opts}`;
 }
 function productLabel(p){ return p? `${p.name} — stock ${fmtNum(p.stockQty)} ${p.unit}` : ''; }
+// Returns the base-stock-unit equivalent quantity for a sale line item, whether it's an
+// older record (sold only in the base unit) or a newer one sold in an alternate unit.
+function itemBaseQty(it, p){
+  if(it.baseQty!=null) return Number(it.baseQty);
+  return p? toBaseQty(p, it.unit||p.unit, it.qty) : Number(it.qty);
+}
+function sellUnitsFor(p){
+  if(!p) return [];
+  const base = {name:p.unit, unitsPerBase:1, price:Number(p.sellingPrice)};
+  const alts = (p.altUnits||[]).map(u=>({name:u.name, unitsPerBase:Number(u.unitsPerBase)||1,
+    price: (u.price!=null && u.price!=='') ? Number(u.price) : (Number(p.sellingPrice)/(Number(u.unitsPerBase)||1))}));
+  return [base, ...alts];
+}
+function unitInfoFor(p, unitName){
+  return sellUnitsFor(p).find(u=>u.name===unitName) || sellUnitsFor(p)[0];
+}
+// Converts a quantity sold in `unitName` into the equivalent quantity in the product's base stock unit.
+function toBaseQty(p, unitName, qty){
+  const info = unitInfoFor(p, unitName);
+  if(!info) return Number(qty)||0;
+  return (Number(qty)||0) / (info.unitsPerBase||1);
+}
 function selectedProductIdFromSearch(role){
   const input = document.querySelector(`.prod-search-input[data-role="${role}"]`);
   return input? input.dataset.selected : '';
@@ -2297,7 +2387,7 @@ function renderSaleBuilder(){
 
         <div class="table-wrap" style="margin-top:6px">
         <table>
-          <thead><tr><th style="width:38%">Product</th><th>Qty</th><th>Unit Price</th><th class="right">Line Total</th><th></th></tr></thead>
+          <thead><tr><th style="width:32%">Product</th><th>Unit</th><th>Qty</th><th>Unit Price</th><th class="right">Line Total</th><th></th></tr></thead>
           <tbody id="lineItemsBody">${renderLineItemsRows()}</tbody>
         </table>
         </div>
@@ -2436,8 +2526,13 @@ function wireDepositApplyBoxEvents(){
 function renderLineItemsRows(){
   return STATE.saleDraft.items.map(it=>{
     const p = STATE.products.find(x=>x.id==it.productId);
+    const units = sellUnitsFor(p);
+    const unitSelect = p? `<select data-role="unit" data-row="${it.id}">${units.map(u=>`<option value="${esc(u.name)}" ${it.unit===u.name?'selected':''}>${esc(u.name)}</option>`).join('')}</select>` : `<select data-role="unit" data-row="${it.id}" disabled><option>—</option></select>`;
+    const baseQty = p? toBaseQty(p, it.unit, it.qty) : Number(it.qty);
+    const stockHint = p? `<div class="hint">= ${fmtNum(baseQty)} ${esc(p.unit)} of stock</div>` : '';
     return `<tr data-row="${it.id}">
       <td style="min-width:220px">${productSearchHtml('prod', it.id, it.productId)}</td>
+      <td style="min-width:110px">${unitSelect}${stockHint}</td>
       <td><input type="number" min="0" step="0.01" data-role="qty" data-row="${it.id}" value="${it.qty}" style="width:90px"></td>
       <td><input type="number" min="0" step="0.01" data-role="price" data-row="${it.id}" value="${it.unitPrice}" style="width:110px"></td>
       <td class="right mono line-total">${money(Number(it.qty)*Number(it.unitPrice))}</td>
@@ -2488,11 +2583,28 @@ function renderTotalsBox(){
       <div><span>Payment Status</span>${paymentBadge(t.paymentStatus)}</div>
     </div>`;
 }
+function updateLineDisplay(rowId){
+  const row = STATE.saleDraft.items.find(it=>it.id==rowId);
+  if(!row) return;
+  const p = STATE.products.find(x=>x.id==row.productId);
+  const tr = document.querySelector(`tr[data-row="${rowId}"]`);
+  if(!tr) return;
+  const totalCell = tr.querySelector('.line-total');
+  if(totalCell) totalCell.textContent = money(Number(row.qty)*Number(row.unitPrice));
+  const unitCell = tr.children[1];
+  let hint = unitCell.querySelector('.hint');
+  if(p){
+    const baseQty = toBaseQty(p, row.unit, row.qty);
+    const text = `= ${fmtNum(baseQty)} ${p.unit} of stock`;
+    if(hint) hint.textContent = text;
+    else unitCell.insertAdjacentHTML('beforeend', `<div class="hint">${text}</div>`);
+  } else if(hint){ hint.remove(); }
+}
 function wireSaleBuilderEvents(){
   renderTotalsBox();
   wireDepositApplyBoxEvents();
   byId('addLineBtn').addEventListener('click', ()=>{
-    STATE.saleDraft.items.push({id:uid(), productId:'', qty:1, unitPrice:0});
+    STATE.saleDraft.items.push({id:uid(), productId:'', qty:1, unitPrice:0, unit:''});
     byId('lineItemsBody').innerHTML = renderLineItemsRows();
     renderTotalsBox();
   });
@@ -2517,12 +2629,33 @@ function wireSaleBuilderEvents(){
     if(!row) return;
     row.productId = productId;
     const p = STATE.products.find(x=>x.id==productId);
-    if(p) row.unitPrice = p.sellingPrice;
-    const tr = document.querySelector(`tr[data-row="${rowId}"] .line-total`);
-    if(tr) tr.textContent = money(Number(row.qty)*Number(row.unitPrice));
-    const priceInput = document.querySelector(`tr[data-row="${rowId}"] [data-role="price"]`);
-    if(priceInput && p) priceInput.value = p.sellingPrice;
+    if(p){ row.unit = p.unit; row.unitPrice = p.sellingPrice; }
+    const tr = document.querySelector(`tr[data-row="${rowId}"]`);
+    if(tr){
+      const unitCell = tr.children[1];
+      unitCell.innerHTML = p? `<select data-role="unit" data-row="${rowId}">${sellUnitsFor(p).map(u=>`<option value="${esc(u.name)}" ${row.unit===u.name?'selected':''}>${esc(u.name)}</option>`).join('')}</select>` : `<select data-role="unit" data-row="${rowId}" disabled><option>—</option></select>`;
+      const priceInput = tr.querySelector('[data-role="price"]');
+      if(priceInput && p) priceInput.value = p.sellingPrice;
+      updateLineDisplay(rowId);
+    }
     renderTotalsBox();
+  });
+  byId('lineItemsBody').addEventListener('change', (e)=>{
+    const u = e.target.closest('[data-role="unit"]');
+    if(u){
+      const rowId = u.dataset.row;
+      const row = STATE.saleDraft.items.find(it=>it.id==rowId);
+      const p = STATE.products.find(x=>x.id==row.productId);
+      row.unit = u.value;
+      const info = unitInfoFor(p, row.unit);
+      if(info){
+        row.unitPrice = info.price;
+        const priceInput = document.querySelector(`tr[data-row="${rowId}"] [data-role="price"]`);
+        if(priceInput) priceInput.value = info.price;
+      }
+      updateLineDisplay(rowId);
+      renderTotalsBox();
+    }
   });
   byId('lineItemsBody').addEventListener('input', (e)=>{
     const q = e.target.closest('[data-role="qty"]'); const pr = e.target.closest('[data-role="price"]');
@@ -2531,8 +2664,7 @@ function wireSaleBuilderEvents(){
       const row = STATE.saleDraft.items.find(it=>it.id==rowId);
       if(q) row.qty = parseFloat(q.value)||0;
       if(pr) row.unitPrice = parseFloat(pr.value)||0;
-      const tr = document.querySelector(`tr[data-row="${rowId}"] .line-total`);
-      if(tr) tr.textContent = money(Number(row.qty)*Number(row.unitPrice));
+      updateLineDisplay(rowId);
       renderTotalsBox();
     }
   });
@@ -2550,14 +2682,16 @@ function wireSaleBuilderEvents(){
 async function saveSale(){
   const items = STATE.saleDraft.items.filter(it=>it.productId && it.qty>0);
   if(items.length===0){ toast('Add at least one item with a quantity','error'); return; }
-  // stock check
+  // stock check (compared in the product's base stock unit, converting whatever unit was actually sold in)
   for(const it of items){
     const p = STATE.products.find(x=>x.id==it.productId);
     const orig = STATE.saleDraft.orig;
-    const origQty = orig? (orig.items.find(x=>String(x.productId)===String(it.productId))?.qty||0) : 0;
-    const available = Number(p.stockQty) + origQty;
-    if(Number(it.qty) > available){
-      if(!confirm(`Insufficient stock for "${p.name}" (available: ${fmtNum(available)} ${p.unit}). Continue anyway?`)) return;
+    const origItem = orig? orig.items.find(x=>String(x.productId)===String(it.productId)) : null;
+    const origBaseQty = origItem? itemBaseQty(origItem,p) : 0;
+    const neededBaseQty = toBaseQty(p, it.unit||p.unit, it.qty);
+    const available = Number(p.stockQty) + origBaseQty;
+    if(neededBaseQty > available){
+      if(!confirm(`Insufficient stock for "${p.name}" (available: ${fmtNum(available)} ${p.unit}, this line needs ${fmtNum(neededBaseQty)} ${p.unit}). Continue anyway?`)) return;
     }
   }
   const t = computeTotals();
@@ -2576,21 +2710,22 @@ async function saveSale(){
 
   const resolvedItems = items.map(it=>{
     const p = STATE.products.find(x=>x.id==it.productId);
-    return {productId:p.id, name:p.name, unit:p.unit, qty:Number(it.qty), unitPrice:Number(it.unitPrice), lineTotal:Number(it.qty)*Number(it.unitPrice)};
+    const unit = it.unit || p.unit;
+    return {productId:p.id, name:p.name, unit, baseUnit:p.unit, qty:Number(it.qty), baseQty: toBaseQty(p, unit, it.qty), unitPrice:Number(it.unitPrice), lineTotal:Number(it.qty)*Number(it.unitPrice)};
   });
 
   const orig = STATE.saleDraft.orig;
-  // restore stock from original items first if editing
+  // restore stock (in base units) from original items first if editing
   if(orig){
     for(const it of orig.items){
       const p = STATE.products.find(x=>x.id==it.productId);
-      if(p){ p.stockQty = Number(p.stockQty)+Number(it.qty); await putRec('products', p); }
+      if(p){ p.stockQty = Number(p.stockQty)+itemBaseQty(it,p); await putRec('products', p); }
     }
   }
-  // deduct stock for new items
+  // deduct stock (in base units) for new items
   for(const it of resolvedItems){
     const p = STATE.products.find(x=>x.id==it.productId);
-    if(p){ p.stockQty = Number(p.stockQty)-Number(it.qty); await putRec('products', p); }
+    if(p){ p.stockQty = Number(p.stockQty)-Number(it.baseQty); await putRec('products', p); }
   }
 
   let invoiceNo = orig? orig.invoiceNo : null;
@@ -2716,7 +2851,7 @@ async function voidSale(id){
   confirmDialog(`Void invoice ${s.invoiceNo}? Stock will be restored${s.depositApplied?.amount? ' and the applied deposit balance will be given back':''}. The record is kept for audit purposes.`, async ()=>{
     for(const it of s.items){
       const p = STATE.products.find(x=>x.id==it.productId);
-      if(p){ p.stockQty = Number(p.stockQty)+Number(it.qty); await putRec('products', p); }
+      if(p){ p.stockQty = Number(p.stockQty)+itemBaseQty(it,p); await putRec('products', p); }
     }
     s.status='void'; s.updatedAt=new Date().toISOString();
     await putRec('sales', s);
@@ -2734,7 +2869,7 @@ async function deleteSale(id){
     if(s.status!=='void'){
       for(const it of s.items){
         const p = STATE.products.find(x=>x.id==it.productId);
-        if(p){ p.stockQty = Number(p.stockQty)+Number(it.qty); await putRec('products', p); }
+        if(p){ p.stockQty = Number(p.stockQty)+itemBaseQty(it,p); await putRec('products', p); }
       }
     }
     await delRec('sales', s.id);
@@ -3267,12 +3402,15 @@ function renderReports(){
   const to = reportRange.to || todayStr();
   const inRange = STATE.sales.filter(s=> inBranch(s) && s.status!=='void' && s.date>=from && s.date<=to);
   const revenue = inRange.reduce((a,s)=>a+Number(s.grandTotal||0),0);
-  const itemsSold = inRange.reduce((a,s)=>a+s.items.reduce((x,it)=>x+Number(it.qty),0),0);
+  const itemsSold = inRange.reduce((a,s)=>a+s.items.reduce((x,it)=>{
+    const p = STATE.products.find(pp=>pp.id==it.productId);
+    return x + itemBaseQty(it,p);
+  },0),0);
   const estProfit = inRange.reduce((a,s)=>{
     return a + s.items.reduce((x,it)=>{
       const p = STATE.products.find(pp=>pp.id==it.productId);
       const cost = p? Number(p.costPrice) : 0;
-      return x + (Number(it.unitPrice)-cost)*Number(it.qty);
+      return x + (Number(it.lineTotal) - cost*itemBaseQty(it,p));
     },0);
   },0);
   const expInRange = STATE.expenditures.filter(x=> inBranch(x) && x.date>=from && x.date<=to);
@@ -3293,8 +3431,9 @@ function renderReports(){
   // top products
   const agg = {};
   inRange.forEach(s=> s.items.forEach(it=>{
+    const p = STATE.products.find(pp=>pp.id==it.productId);
     agg[it.productId] = agg[it.productId] || {name:it.name, qty:0, revenue:0};
-    agg[it.productId].qty += Number(it.qty);
+    agg[it.productId].qty += itemBaseQty(it,p);
     agg[it.productId].revenue += Number(it.lineTotal);
   }));
   const top = Object.values(agg).sort((a,b)=>b.revenue-a.revenue).slice(0,8);
