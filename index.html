@@ -41,6 +41,8 @@
   --warning-bg:#FBF1DD;
   --danger:#B23A3A;
   --danger-bg:#FBEAEA;
+  --hover-green:#DFF5E4;
+  --hover-green-border:#8FD9A8;
   --radius:10px;
   --radius-sm:6px;
   --shadow:0 1px 2px rgba(20,27,36,.06), 0 6px 20px -8px rgba(20,27,36,.12);
@@ -145,18 +147,30 @@ nav.mainnav{flex:1;padding:14px 10px;overflow-y:auto;}
 
 .btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:var(--surface);color:var(--ink);
   padding:9px 14px;border-radius:var(--radius-sm);font-size:13.5px;font-weight:600;transition:background .12s,border-color .12s;white-space:nowrap;}
-.btn:hover{background:var(--surface-2);border-color:var(--aluminium-dark);}
+.btn:hover{background:var(--hover-green);border-color:var(--hover-green-border);}
 .btn-primary{background:var(--primary);border-color:var(--primary);color:#fff;}
-.btn-primary:hover{background:var(--primary-dark);border-color:var(--primary-dark);}
+.btn-primary:hover{background:var(--primary-dark);border-color:var(--primary-dark);filter:brightness(1.08);}
 .btn-danger{background:var(--danger-bg);border-color:#EFC9C9;color:var(--danger);}
 .btn-danger:hover{background:#F6D8D8;}
 .btn-ghost{background:transparent;border-color:transparent;color:var(--primary);padding:6px 8px;}
-.btn-ghost:hover{background:var(--primary-light);}
+.btn-ghost:hover{background:var(--hover-green);}
 .btn-sm{padding:6px 10px;font-size:12.5px;}
 .btn:disabled{opacity:.5;cursor:not-allowed;}
-.icon-btn{border:0;background:transparent;color:var(--ink-soft);padding:5px;border-radius:6px;display:inline-flex;}
-.icon-btn:hover{background:var(--surface-2);color:var(--ink);}
+.btn:disabled:hover{background:var(--surface);border-color:var(--border);}
+.icon-btn{border:0;background:transparent;color:var(--ink-soft);padding:5px;border-radius:6px;display:inline-flex;transition:background .12s;}
+.icon-btn:hover{background:var(--hover-green);color:var(--ink);}
 .icon-btn svg{width:16px;height:16px;}
+
+/* Global "working..." indicator — shown automatically while the app is waiting on
+   the database (Firestore), so a click that takes a moment doesn't look frozen. */
+#globalLoadingBar{position:fixed;top:0;left:0;height:3px;width:100%;z-index:9999;
+  background:linear-gradient(90deg, transparent, var(--success), var(--hover-green-border), transparent);
+  background-size:200% 100%;opacity:0;pointer-events:none;transition:opacity .15s;
+  animation:loadingSweep 1.1s linear infinite;}
+#globalLoadingBar.show{opacity:1;}
+@keyframes loadingSweep{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
+body.app-busy, body.app-busy *{cursor:progress !important;}
+body.app-busy button, body.app-busy .btn, body.app-busy .icon-btn{opacity:.85;}
 
 input[type=text],input[type=number],input[type=date],input[type=tel],input[type=email],input[type=password],select,textarea{
   width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:#fff;color:var(--ink);
@@ -293,6 +307,7 @@ tbody tr:hover{background:var(--surface-2);}
 </style>
 </head>
 <body>
+<div id="globalLoadingBar"></div>
 <div id="loginScreen">
   <div class="login-card">
     <div class="brushed"></div>
@@ -386,7 +401,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
-  apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+   apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -397,6 +412,7 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const fsdb = firebase.firestore();
+
 
 /* All the "stores" this app keeps in Firestore. Autoincrement stores get a
    numeric `id` field (kept compatible with the rest of the app, which sorts/
@@ -442,6 +458,46 @@ function momoOptionChoices(selected){
    touched the database engine directly. Everything else — sales, inventory,
    deposits, reports, etc. — only ever calls getAll/getOne/putRec/delRec/
    clearStore, so swapping the engine underneath them is safe. */
+/* ---------------- global "is anything loading?" tracker ----------------
+   Every database call funnels through here so we can show a subtle top
+   loading bar (and a "please wait" cursor) whenever an action is taking a
+   moment — e.g. opening a window/modal that had to wait on the network. */
+let busyCount = 0, busyShowTimer = null;
+function busyStart(){
+  busyCount++;
+  if(busyCount===1){
+    clearTimeout(busyShowTimer);
+    busyShowTimer = setTimeout(()=>{
+      if(busyCount>0){
+        document.body.classList.add('app-busy');
+        const bar = document.getElementById('globalLoadingBar');
+        if(bar) bar.classList.add('show');
+      }
+    }, 180); // don't flash the indicator for quick, barely-noticeable operations
+  }
+}
+function busyEnd(){
+  busyCount = Math.max(0, busyCount-1);
+  if(busyCount===0){
+    clearTimeout(busyShowTimer);
+    document.body.classList.remove('app-busy');
+    const bar = document.getElementById('globalLoadingBar');
+    if(bar) bar.classList.remove('show');
+  }
+}
+let dbReachable = true;
+function markDbReachable(ok){
+  if(ok===dbReachable) return;
+  dbReachable = ok;
+  updateOnlineStatus();
+}
+function trackBusy(promise){
+  busyStart();
+  return promise.then(
+    (v)=>{ busyEnd(); markDbReachable(true); return v; },
+    (err)=>{ busyEnd(); markDbReachable(false); console.error('Database error:', err); throw err; }
+  );
+}
 function openDB(){
   return new Promise((resolve)=>{
     // Firestore has no "open" step the way IndexedDB does; we just mark
@@ -462,37 +518,41 @@ async function nextAutoId(store){
   });
 }
 function getAll(store){
-  return fsdb.collection(store).get().then(snap=> snap.docs.map(d=>d.data()));
+  return trackBusy(fsdb.collection(store).get().then(snap=> snap.docs.map(d=>d.data())));
 }
 function getOne(store,key){
-  return docRefFor(store,key).get().then(d=> d.exists ? d.data() : undefined);
+  return trackBusy(docRefFor(store,key).get().then(d=> d.exists ? d.data() : undefined));
 }
-async function putRec(store,val){
-  if(KEYED_STORES[store]){
-    const key = val[KEYED_STORES[store]];
-    await docRefFor(store,key).set(val);
-    return key;
-  }
-  // autoincrement-style store
-  if(val.id===undefined || val.id===null){
-    val.id = await nextAutoId(store);
-  }
-  await docRefFor(store,val.id).set(val);
-  return val.id;
+function putRec(store,val){
+  return trackBusy((async ()=>{
+    if(KEYED_STORES[store]){
+      const key = val[KEYED_STORES[store]];
+      await docRefFor(store,key).set(val);
+      return key;
+    }
+    // autoincrement-style store
+    if(val.id===undefined || val.id===null){
+      val.id = await nextAutoId(store);
+    }
+    await docRefFor(store,val.id).set(val);
+    return val.id;
+  })());
 }
 function delRec(store,key){
-  return docRefFor(store,key).delete();
+  return trackBusy(docRefFor(store,key).delete());
 }
-async function clearStore(store){
-  const snap = await fsdb.collection(store).get();
-  const batches = [];
-  let batch = fsdb.batch(), count = 0;
-  snap.docs.forEach(d=>{
-    batch.delete(d.ref); count++;
-    if(count===450){ batches.push(batch.commit()); batch = fsdb.batch(); count=0; }
-  });
-  if(count>0) batches.push(batch.commit());
-  await Promise.all(batches);
+function clearStore(store){
+  return trackBusy((async ()=>{
+    const snap = await fsdb.collection(store).get();
+    const batches = [];
+    let batch = fsdb.batch(), count = 0;
+    snap.docs.forEach(d=>{
+      batch.delete(d.ref); count++;
+      if(count===450){ batches.push(batch.commit()); batch = fsdb.batch(); count=0; }
+    });
+    if(count>0) batches.push(batch.commit());
+    await Promise.all(batches);
+  })());
 }
 
 /* ---------------- live sync across everyone ----------------
@@ -518,7 +578,10 @@ function startLiveSync(){
     }, 250); // small debounce so many rapid changes only trigger one re-render
   };
   allStores.forEach(store=>{
-    fsdb.collection(store).onSnapshot(()=>{ queueRefresh(); }, (err)=>{ console.error('Live sync error on', store, err); });
+    fsdb.collection(store).onSnapshot(
+      ()=>{ markDbReachable(true); queueRefresh(); },
+      (err)=>{ console.error('Live sync error on', store, err); markDbReachable(false); }
+    );
   });
 }
 
@@ -763,10 +826,15 @@ async function refreshAll(){
 }
 
 function updateOnlineStatus(){
-  const online = navigator.onLine;
   const pill = byId('statusPill');
+  if(!pill) return;
+  const online = navigator.onLine && dbReachable;
   pill.classList.toggle('offline', !online);
-  byId('statusText').textContent = online ? 'Online' : 'Offline — working locally';
+  byId('statusText').textContent = !navigator.onLine
+    ? 'Offline — no internet connection'
+    : !dbReachable
+      ? 'Server unreachable — retrying…'
+      : 'Online';
 }
 
 /* ---------------- sidebar / nav ---------------- */
@@ -1074,6 +1142,7 @@ function momoIndicator(s){
    INVENTORY
    ============================================================ */
 let invFilter = {q:'', category:''};
+let invSearchDebounce = null;
 function renderInventory(){
   const rows = STATE.products.filter(p=>{
     if(!inBranch(p)) return false;
@@ -4248,7 +4317,20 @@ function wireTabEvents(){
   v.querySelectorAll('[data-action="convert-units"]').forEach(b=>b.addEventListener('click', ()=>openConvertUnitsModal(b.dataset.id)));
   v.querySelectorAll('[data-action="edit-product"]').forEach(b=>b.addEventListener('click', ()=>openEditProduct(b.dataset.id)));
   v.querySelectorAll('[data-action="delete-product"]').forEach(b=>b.addEventListener('click', ()=>deleteProduct(b.dataset.id)));
-  const invSearch = byId('invSearch'); if(invSearch) invSearch.addEventListener('input', (e)=>{invFilter.q=e.target.value; renderInventoryPartial();});
+  const invSearch = byId('invSearch');
+  if(invSearch) invSearch.addEventListener('input', (e)=>{
+    const val = e.target.value;
+    clearTimeout(invSearchDebounce);
+    invSearchDebounce = setTimeout(()=>{
+      if(val.length===0 || val.length>=4){
+        invFilter.q = val;
+        const caret = e.target.selectionStart;
+        renderInventoryPartial();
+        const fresh = byId('invSearch');
+        if(fresh){ fresh.focus(); try{ fresh.setSelectionRange(caret, caret); }catch(_){} }
+      }
+    }, 200);
+  });
   const invCat = byId('invCategory'); if(invCat) invCat.addEventListener('change', (e)=>{invFilter.category=e.target.value; renderInventoryPartial();});
 
   // Supplies
