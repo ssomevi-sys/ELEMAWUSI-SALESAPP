@@ -416,7 +416,6 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const fsdb = firebase.firestore();
-
 /* All the "stores" this app keeps in Firestore. Autoincrement stores get a
    numeric `id` field (kept compatible with the rest of the app, which sorts/
    compares by `id`). 'users' is keyed by username, 'settings' by a fixed key. */
@@ -1210,7 +1209,7 @@ function altUnitRowHtml(u, idx, baseUnit){
   u = u || {name:'', unitsPerBase:'', price:''};
   return `<div class="field-row alt-unit-row" data-idx="${idx}" style="align-items:flex-end">
     <div class="field"><label>${idx===0?'Sell Also In (Unit)':''}</label>
-      <select class="au-name">${UNITS.map(o=>`<option ${u.name===o?'selected':''}>${esc(o)}</option>`).join('')}</select>
+      <select class="au-name">${UNITS.map(o=>`<option value="${esc(o)}" ${u.name===o?'selected':''}>${esc(o)}</option>`).join('')}</select>
     </div>
     <div class="field"><label>${idx===0?`= how many per 1 ${esc(baseUnit)}?`:''}</label>
       <input type="number" min="0.0001" step="any" class="au-perbase" value="${u.unitsPerBase||''}" placeholder="e.g. 20">
@@ -2630,6 +2629,15 @@ function wireProductSearch(container, onSelect){
     input.select();
     showList(input, '');
   });
+  // Prevent the input from losing focus when a dropdown item is pressed — otherwise the
+  // focusout handler below can hide the list before the click actually registers on it,
+  // which is exactly what caused "clicking a product in the list does nothing".
+  container.addEventListener('mousedown', (e)=>{
+    if(e.target.closest('.prod-search-item')) e.preventDefault();
+  });
+  container.addEventListener('touchstart', (e)=>{
+    if(e.target.closest('.prod-search-item')) e.preventDefault();
+  }, {passive:false});
   container.addEventListener('click', (e)=>{
     const item = e.target.closest('.prod-search-item');
     if(item){
