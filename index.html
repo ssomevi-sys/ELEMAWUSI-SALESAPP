@@ -421,7 +421,7 @@ const fsdb = firebase.firestore();
    numeric `id` field (kept compatible with the rest of the app, which sorts/
    compares by `id`). 'users' is keyed by username, 'settings' by a fixed key. */
 const AUTOINC_STORES = ['products','sales','priceHistory','stockLog','expenditures','stockTransport',
-  'deliveries','deposits','internalUsage','stockTransfers','supplies','customerCredit','returns','unitConversions'];
+  'deliveries','deposits','internalUsage','stockTransfers','supplies','customerCredit','returns','unitConversions','boms'];
 const KEYED_STORES = { users:'username', settings:'key' };
 
 /* ---------------- state ---------------- */
@@ -437,14 +437,15 @@ const BRANCHES = {
   ]}
 };
 let STATE = {
-  products: [], sales: [], priceHistory: [], stockLog: [], expenditures: [], stockTransport: [], deliveries: [], internalUsage: [], settings: null, users: [], deposits: [], stockTransfers: [], supplies: [], customerCredit: [], returns: [], unitConversions: [],
+  products: [], sales: [], priceHistory: [], stockLog: [], expenditures: [], stockTransport: [], deliveries: [], internalUsage: [], settings: null, users: [], deposits: [], stockTransfers: [], supplies: [], customerCredit: [], returns: [], unitConversions: [], boms: [],
   currentUser: null, // {username, fullName, role}
   currentBranch: 'main', // main | annex
   tab: 'dashboard',
   salesSubView: 'list', // list | builder
   saleDraft: null,
-  suppliesSubView: 'list', // list | builder
+  suppliesSubView: 'list', // list | builder | bom | bomBuilder
   supplyDraft: null,
+  bomDraft: null,
   rowSeq: 1,
 };
 function inBranch(x){ return (x.branch||'main')===STATE.currentBranch; }
@@ -576,7 +577,7 @@ function startLiveSync(){
     setTimeout(async ()=>{
       refreshQueued = false;
       await refreshAll();
-      const midForm = STATE.salesSubView==='builder' || STATE.suppliesSubView==='builder';
+      const midForm = STATE.salesSubView==='builder' || STATE.suppliesSubView==='builder' || STATE.suppliesSubView==='bomBuilder';
       if(STATE.currentUser && !midForm){ renderUserChip(); render(); }
     }, 250); // small debounce so many rapid changes only trigger one re-render
   };
@@ -825,6 +826,7 @@ async function refreshAll(){
   STATE.customerCredit = (await getAll('customerCredit')).sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
   STATE.returns = (await getAll('returns')).sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
   STATE.unitConversions = (await getAll('unitConversions')).sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
+  STATE.boms = (await getAll('boms')).sort((a,b)=>a.id-b.id);
   STATE.users = (await getAll('users')).sort((a,b)=>a.username.localeCompare(b.username));
 }
 
@@ -1517,14 +1519,19 @@ function suppliesDefaultRange(){
 }
 function renderSupplies(){
   if(STATE.suppliesSubView==='builder') return renderSupplyBuilder();
+  if(STATE.suppliesSubView==='bom') return renderBomList();
+  if(STATE.suppliesSubView==='bomBuilder') return renderBomBuilder();
   return renderSuppliesList();
 }
 function renderSuppliesTab(){
   const v = byId('view');
   if(STATE.suppliesSubView==='builder') v.innerHTML = renderSupplyBuilder();
+  else if(STATE.suppliesSubView==='bom') v.innerHTML = renderBomList();
+  else if(STATE.suppliesSubView==='bomBuilder') v.innerHTML = renderBomBuilder();
   else v.innerHTML = renderSuppliesList();
   wireTabEvents();
   if(STATE.suppliesSubView==='builder') wireSupplyBuilderEvents();
+  if(STATE.suppliesSubView==='bomBuilder') wireBomBuilderEvents();
 }
 function supplyBalance(x){ return Number(x.amount||0) - Number(x.amountPaid||0); }
 function supplyPaymentBadge(x){
@@ -1560,6 +1567,7 @@ function renderSuppliesList(){
         <div class="field" style="margin:0"><label>To</label><input type="date" id="supplies_to" value="${to}" style="width:auto"></div>
         <span style="flex:1"></span>
         <button class="btn" id="exportSuppliesCsvBtn">⬇ Export CSV</button>
+        <button class="btn" data-action="open-bom-list">🧩 Bill of Materials</button>
         <button class="btn btn-primary" data-action="new-supply">＋ Record Purchase</button>
       </div>
       <div class="table-wrap">
@@ -2289,11 +2297,16 @@ async function authorizeReturn(id){
   const r = STATE.returns.find(x=>x.id==id); if(!r) return;
   confirmDialog(`Authorize this refund of ${money(r.totalRefund)} for invoice ${r.invoiceNo}? Stock will be restored for the returned item(s) and the sale's paid amount will be reduced accordingly.`, async ()=>{
     const now = new Date().toISOString();
+    const ledger = {};
     for(const it of r.items){
       const p = STATE.products.find(pp=>pp.id==it.productId);
-      const baseQty = toBaseQty(p, it.unit||(p?p.unit:''), it.qty);
-      if(p){ p.stockQty = Number(p.stockQty)+baseQty; p.updatedAt=now; await putRec('products', p); }
-      await putRec('stockLog', {productId:it.productId, productName:it.productName, type:'return-in', qty:it.qty, resultingStock: p? p.stockQty : null, reason:`Customer return — Invoice ${r.invoiceNo} (${fmtNum(baseQty)} ${p?p.unit:''} restored)`, date:now, branch:r.branch||'main'});
+      if(p) accumulateMovement(ledger, p, it.unit||p.unit, it.qty, +1);
+    }
+    await applyMovementLedger(ledger);
+    for(const [pid, delta] of Object.entries(ledger)){
+      if(Math.abs(delta)<1e-9) continue;
+      const cp = STATE.products.find(x=>x.id==pid);
+      await putRec('stockLog', {productId:pid, productName:cp?cp.name:pid, type:'return-in', qty:delta, resultingStock: cp? cp.stockQty : null, reason:`Customer return — Invoice ${r.invoiceNo}`, date:now, branch:r.branch||'main'});
     }
     const s = STATE.sales.find(x=>x.id==r.saleId);
     if(s){
@@ -2370,6 +2383,213 @@ function toBaseQty(p, unitName, qty){
   const info = unitInfoFor(p, unitName);
   if(!info) return Number(qty)||0;
   return (Number(qty)||0) / (info.unitsPerBase||1);
+}
+/* ---------------- Bill of Materials / Kits ----------------
+   A BOM turns a "kit" product into a bundle of component products. The kit product
+   itself is never stocked — selling it (or voiding/returning a sale of it) instead
+   moves stock on its components, converted into each component's own base unit. */
+function activeBomFor(productId){
+  return (STATE.boms||[]).find(b => String(b.kitProductId)===String(productId) && b.active!==false);
+}
+// Returns [{productId, qty}], where qty is the BASE-unit stock change (always positive — the
+// caller decides the sign) needed for selling `qty` of `p` in `unit`. If `p` is a kit (has an
+// active BOM), the movement is against its components instead of the kit product itself.
+function stockMovementsFor(p, unit, qty){
+  const kitBaseQty = toBaseQty(p, unit, qty);
+  const bom = activeBomFor(p.id);
+  if(!bom || !bom.components || !bom.components.length) return [{productId:p.id, qty:kitBaseQty}];
+  return bom.components.map(c=>{
+    const cp = STATE.products.find(x=>x.id==c.productId);
+    const perKit = cp? toBaseQty(cp, c.unit||cp.unit, c.qty) : (Number(c.qty)||0);
+    return {productId:c.productId, qty: perKit * kitBaseQty};
+  });
+}
+// The cost of one base unit of `p` — for a kit, this is the rolled-up cost of its components,
+// since a kit product usually doesn't carry its own cost price.
+function effectiveCostPerUnit(p){
+  const bom = activeBomFor(p.id);
+  if(!bom || !bom.components || !bom.components.length) return Number(p.costPrice)||0;
+  return bom.components.reduce((sum,c)=>{
+    const cp = STATE.products.find(x=>x.id==c.productId);
+    if(!cp) return sum;
+    const perKit = toBaseQty(cp, c.unit||cp.unit, c.qty);
+    return sum + perKit*(Number(cp.costPrice)||0);
+  }, 0);
+}
+// Applies (or, with sign -1, reverses) the stock movements for selling `qty` of `p` in `unit`
+// into a running {productId: delta} ledger, without touching the database yet.
+function accumulateMovement(ledger, p, unit, qty, sign){
+  stockMovementsFor(p, unit, qty).forEach(m=>{ ledger[m.productId] = (ledger[m.productId]||0) + sign*m.qty; });
+}
+async function applyMovementLedger(ledger){
+  for(const [pid, delta] of Object.entries(ledger)){
+    if(Math.abs(delta) < 1e-9) continue;
+    const cp = STATE.products.find(x=>x.id==pid);
+    if(cp){ cp.stockQty = Number(cp.stockQty) + delta; await putRec('products', cp); }
+  }
+}
+function renderBomList(){
+  const rows = STATE.boms.filter(inBranch);
+  return `
+    <div class="help-box">A Bill of Materials turns one product into a "Kit" made up of other products. Selling a kit deducts stock from its components (converted into each component's own unit) instead of the kit product itself — the kit's own stock quantity is not used.</div>
+    <div class="panel">
+      <div class="panel-toolbar">
+        <button class="btn" data-action="back-to-supplies">← Back to Purchases</button>
+        <span style="flex:1"></span>
+        <button class="btn btn-primary" data-action="new-bom">＋ New Bill of Materials</button>
+      </div>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>Kit Product</th><th class="right">Components</th><th>Est. Component Cost</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+        ${rows.length? rows.map(b=>{
+          const kit = STATE.products.find(p=>p.id==b.kitProductId);
+          const cost = kit? effectiveCostPerUnit(kit) : 0;
+          return `<tr>
+            <td>${kit? esc(kit.name) : '<span class="hint">Product deleted</span>'}</td>
+            <td class="right mono">${(b.components||[]).length}</td>
+            <td class="mono">${money(cost)} per ${kit? esc(kit.unit):'unit'}</td>
+            <td><button class="btn btn-sm" data-action="toggle-bom-active" data-id="${b.id}">${b.active===false? '<span class="badge badge-bad">Inactive</span>' : '<span class="badge badge-ok">Active</span>'}</button></td>
+            <td class="right">
+              <button class="icon-btn" title="Edit" data-action="edit-bom" data-id="${b.id}">${iconEdit()}</button>
+              <button class="icon-btn" title="Delete" data-action="delete-bom" data-id="${b.id}">${iconTrash()}</button>
+            </td>
+          </tr>`;
+        }).join('') : `<tr class="empty-row"><td colspan="5">No Bills of Materials yet. Click "New Bill of Materials" to define a kit.</td></tr>`}
+        </tbody>
+      </table>
+      </div>
+    </div>
+  `;
+}
+function openBomBuilder(existing){
+  STATE.bomDraft = {
+    editingId: existing? existing.id : null,
+    kitProductId: existing? existing.kitProductId : '',
+    components: existing? existing.components.map(c=>({id:uid(), productId:c.productId, qty:c.qty, unit:c.unit})) : [{id:uid(), productId:'', qty:1, unit:''}],
+    notes: existing? (existing.notes||'') : ''
+  };
+  STATE.suppliesSubView = 'bomBuilder';
+  render();
+}
+function renderBomComponentRows(){
+  return STATE.bomDraft.components.map(c=>{
+    const p = STATE.products.find(x=>x.id==c.productId);
+    const units = sellUnitsFor(p);
+    const unitSelect = p? `<select data-role="bomunit" data-row="${c.id}">${units.map(u=>`<option value="${esc(u.name)}" ${c.unit===u.name?'selected':''}>${esc(u.name)}</option>`).join('')}</select>` : `<select data-role="bomunit" data-row="${c.id}" disabled><option>—</option></select>`;
+    return `<tr data-row="${c.id}">
+      <td style="min-width:220px">${productSearchHtml('bomcomp', c.id, c.productId)}</td>
+      <td style="min-width:110px">${unitSelect}</td>
+      <td><input type="number" min="0" step="0.0001" data-role="bomqty" data-row="${c.id}" value="${c.qty}" style="width:100px"></td>
+      <td class="right"><button class="icon-btn" data-action="removeBomLine" data-row="${c.id}">${iconTrash()}</button></td>
+    </tr>`;
+  }).join('');
+}
+function renderBomBuilder(){
+  const d = STATE.bomDraft;
+  const kit = STATE.products.find(p=>p.id==d.kitProductId);
+  return `
+    <div class="panel">
+      <div class="panel-head"><h3>${d.editingId? 'Edit' : 'New'} Bill of Materials</h3></div>
+      <div class="panel-body">
+        <div class="field" style="max-width:360px">
+          <label>Kit Product <span class="hint" style="font-weight:400">(the finished item customers buy)</span></label>
+          ${productSearchHtml('bomkit', 'kit', d.kitProductId)}
+        </div>
+        <div class="field">
+          <label>Made Up Of (Components)</label>
+          <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:38%">Component Product</th><th>Unit</th><th>Qty per 1 ${kit? esc(kit.unit):'kit unit'}</th><th></th></tr></thead>
+            <tbody id="bomComponentsBody">${renderBomComponentRows()}</tbody>
+          </table>
+          </div>
+          <button class="btn btn-sm" style="margin-top:10px" id="addBomLineBtn">＋ Add Component</button>
+        </div>
+        <div class="field"><label>Notes</label><textarea id="bom_notes" rows="2">${esc(d.notes)}</textarea></div>
+      </div>
+      <div class="panel-toolbar" style="justify-content:flex-end">
+        <button class="btn" data-action="cancel-bom-builder">Cancel</button>
+        <button class="btn btn-primary" id="saveBomBtn">Save Bill of Materials</button>
+      </div>
+    </div>
+  `;
+}
+function wireBomBuilderEvents(){
+  const d = STATE.bomDraft;
+  wireProductSearch(byId('view'), (rowId, productId)=>{
+    if(rowId==='kit'){
+      d.kitProductId = productId;
+      return;
+    }
+    const row = d.components.find(c=>c.id==rowId);
+    if(!row) return;
+    row.productId = productId;
+    const p = STATE.products.find(x=>x.id==productId);
+    if(p) row.unit = p.unit;
+    const tr = document.querySelector(`#bomComponentsBody tr[data-row="${rowId}"]`);
+    if(tr){
+      const unitCell = tr.children[1];
+      unitCell.innerHTML = p? `<select data-role="bomunit" data-row="${rowId}">${sellUnitsFor(p).map(u=>`<option value="${esc(u.name)}" ${row.unit===u.name?'selected':''}>${esc(u.name)}</option>`).join('')}</select>` : `<select data-role="bomunit" data-row="${rowId}" disabled><option>—</option></select>`;
+    }
+  });
+  byId('addBomLineBtn').addEventListener('click', ()=>{
+    d.components.push({id:uid(), productId:'', qty:1, unit:''});
+    byId('bomComponentsBody').innerHTML = renderBomComponentRows();
+  });
+  byId('bomComponentsBody').addEventListener('change', (e)=>{
+    const u = e.target.closest('[data-role="bomunit"]');
+    if(u){ const row = d.components.find(c=>c.id==u.dataset.row); if(row) row.unit = u.value; }
+  });
+  byId('bomComponentsBody').addEventListener('input', (e)=>{
+    const q = e.target.closest('[data-role="bomqty"]');
+    if(q){ const row = d.components.find(c=>c.id==q.dataset.row); if(row) row.qty = parseFloat(q.value)||0; }
+  });
+  byId('bomComponentsBody').addEventListener('click', (e)=>{
+    const rm = e.target.closest('[data-action="removeBomLine"]');
+    if(rm){
+      d.components = d.components.filter(c=>c.id!=rm.dataset.row);
+      if(d.components.length===0) d.components.push({id:uid(), productId:'', qty:1, unit:''});
+      byId('bomComponentsBody').innerHTML = renderBomComponentRows();
+    }
+  });
+  byId('saveBomBtn').addEventListener('click', saveBom);
+}
+async function saveBom(){
+  const d = STATE.bomDraft;
+  const kitId = selectedProductIdFromSearch('bomkit') || d.kitProductId;
+  if(!kitId){ toast('Choose a kit product','error'); return; }
+  const components = d.components.filter(c=>c.productId && c.qty>0).map(c=>({productId:c.productId, qty:Number(c.qty), unit:c.unit||(STATE.products.find(p=>p.id==c.productId)||{}).unit}));
+  if(components.length===0){ toast('Add at least one component with a quantity','error'); return; }
+  if(components.some(c=>String(c.productId)===String(kitId))){ toast('A kit cannot contain itself as a component','error'); return; }
+  const existingForProduct = STATE.boms.find(b=>String(b.kitProductId)===String(kitId) && b.id!==d.editingId);
+  if(existingForProduct){ toast('This product already has a Bill of Materials — edit that one instead of creating a second.','error'); return; }
+  const now = new Date().toISOString();
+  const rec = d.editingId? {...STATE.boms.find(b=>b.id==d.editingId)} : {createdAt:now, active:true, branch:STATE.currentBranch};
+  Object.assign(rec, {kitProductId:kitId, components, notes: byId('bom_notes').value.trim(), updatedAt:now});
+  await putRec('boms', rec);
+  await refreshAll();
+  STATE.suppliesSubView = 'bom';
+  toast('Bill of Materials saved');
+  render();
+}
+async function deleteBom(id){
+  const b = STATE.boms.find(x=>x.id==id); if(!b) return;
+  confirmDialog('Delete this Bill of Materials? The kit product will no longer explode into components when sold.', async ()=>{
+    await delRec('boms', b.id);
+    await refreshAll();
+    closeModal();
+    toast('Bill of Materials deleted');
+    render();
+  });
+}
+async function toggleBomActive(id){
+  const b = STATE.boms.find(x=>x.id==id); if(!b) return;
+  b.active = b.active===false ? true : false;
+  b.updatedAt = new Date().toISOString();
+  await putRec('boms', b);
+  await refreshAll();
+  render();
 }
 function selectedProductIdFromSearch(role){
   const input = document.querySelector(`.prod-search-input[data-role="${role}"]`);
@@ -2754,16 +2974,29 @@ function wireSaleBuilderEvents(){
 async function saveSale(){
   const items = STATE.saleDraft.items.filter(it=>it.productId && it.qty>0);
   if(items.length===0){ toast('Add at least one item with a quantity','error'); return; }
-  // stock check (compared in the product's base stock unit, converting whatever unit was actually sold in)
+  const orig = STATE.saleDraft.orig;
+
+  // Compute the net BASE-unit stock change per affected product (kit sales move their
+  // components instead of the kit itself) — restoring the original sale's items (if editing)
+  // and deducting the new items, netted together so shared components check out correctly.
+  const ledger = {};
+  if(orig){
+    for(const it of orig.items){
+      const p = STATE.products.find(x=>x.id==it.productId);
+      if(p) accumulateMovement(ledger, p, it.unit||p.unit, it.qty, +1);
+    }
+  }
   for(const it of items){
     const p = STATE.products.find(x=>x.id==it.productId);
-    const orig = STATE.saleDraft.orig;
-    const origItem = orig? orig.items.find(x=>String(x.productId)===String(it.productId)) : null;
-    const origBaseQty = origItem? itemBaseQty(origItem,p) : 0;
-    const neededBaseQty = toBaseQty(p, it.unit||p.unit, it.qty);
-    const available = Number(p.stockQty) + origBaseQty;
-    if(neededBaseQty > available){
-      if(!confirm(`Insufficient stock for "${p.name}" (available: ${fmtNum(available)} ${p.unit}, this line needs ${fmtNum(neededBaseQty)} ${p.unit}). Continue anyway?`)) return;
+    if(p) accumulateMovement(ledger, p, it.unit||p.unit, it.qty, -1);
+  }
+  for(const [pid, delta] of Object.entries(ledger)){
+    if(delta>=0) continue;
+    const cp = STATE.products.find(x=>x.id==pid);
+    if(!cp) continue;
+    const resulting = Number(cp.stockQty) + delta;
+    if(resulting < 0){
+      if(!confirm(`Insufficient stock for "${cp.name}" (available: ${fmtNum(cp.stockQty)} ${cp.unit}, this would leave ${fmtNum(resulting)} ${cp.unit}). Continue anyway?`)) return;
     }
   }
   const t = computeTotals();
@@ -2786,19 +3019,7 @@ async function saveSale(){
     return {productId:p.id, name:p.name, unit, baseUnit:p.unit, qty:Number(it.qty), baseQty: toBaseQty(p, unit, it.qty), unitPrice:Number(it.unitPrice), lineTotal:Number(it.qty)*Number(it.unitPrice)};
   });
 
-  const orig = STATE.saleDraft.orig;
-  // restore stock (in base units) from original items first if editing
-  if(orig){
-    for(const it of orig.items){
-      const p = STATE.products.find(x=>x.id==it.productId);
-      if(p){ p.stockQty = Number(p.stockQty)+itemBaseQty(it,p); await putRec('products', p); }
-    }
-  }
-  // deduct stock (in base units) for new items
-  for(const it of resolvedItems){
-    const p = STATE.products.find(x=>x.id==it.productId);
-    if(p){ p.stockQty = Number(p.stockQty)-Number(it.baseQty); await putRec('products', p); }
-  }
+  await applyMovementLedger(ledger);
 
   let invoiceNo = orig? orig.invoiceNo : null;
   if(!invoiceNo){
@@ -2921,10 +3142,12 @@ async function markCollected(id){
 async function voidSale(id){
   const s = STATE.sales.find(x=>x.id==id); if(!s) return;
   confirmDialog(`Void invoice ${s.invoiceNo}? Stock will be restored${s.depositApplied?.amount? ' and the applied deposit balance will be given back':''}. The record is kept for audit purposes.`, async ()=>{
+    const ledger = {};
     for(const it of s.items){
       const p = STATE.products.find(x=>x.id==it.productId);
-      if(p){ p.stockQty = Number(p.stockQty)+itemBaseQty(it,p); await putRec('products', p); }
+      if(p) accumulateMovement(ledger, p, it.unit||p.unit, it.qty, +1);
     }
+    await applyMovementLedger(ledger);
     s.status='void'; s.updatedAt=new Date().toISOString();
     await putRec('sales', s);
     await removeDeliveryForSale(s.id);
@@ -2939,10 +3162,12 @@ async function deleteSale(id){
   const s = STATE.sales.find(x=>x.id==id); if(!s) return;
   confirmDialog(`Permanently delete invoice ${s.invoiceNo}? ${s.status!=='void'?'Stock allocated to this sale will be restored.':''}${s.depositApplied?.amount? ' The applied deposit balance will be given back.':''} This cannot be undone.`, async ()=>{
     if(s.status!=='void'){
+      const ledger = {};
       for(const it of s.items){
         const p = STATE.products.find(x=>x.id==it.productId);
-        if(p){ p.stockQty = Number(p.stockQty)+itemBaseQty(it,p); await putRec('products', p); }
+        if(p) accumulateMovement(ledger, p, it.unit||p.unit, it.qty, +1);
       }
+      await applyMovementLedger(ledger);
     }
     await delRec('sales', s.id);
     await removeDeliveryForSale(s.id);
@@ -3481,7 +3706,7 @@ function renderReports(){
   const estProfit = inRange.reduce((a,s)=>{
     return a + s.items.reduce((x,it)=>{
       const p = STATE.products.find(pp=>pp.id==it.productId);
-      const cost = p? Number(p.costPrice) : 0;
+      const cost = p? effectiveCostPerUnit(p) : 0;
       return x + (Number(it.lineTotal) - cost*itemBaseQty(it,p));
     },0);
   },0);
@@ -4338,6 +4563,15 @@ function wireTabEvents(){
 
   // Supplies
   const newSupplyBtn = v.querySelector('[data-action="new-supply"]'); if(newSupplyBtn) newSupplyBtn.addEventListener('click', ()=>openSupplyBuilder(null));
+  const openBomListBtn = v.querySelector('[data-action="open-bom-list"]'); if(openBomListBtn) openBomListBtn.addEventListener('click', ()=>{ STATE.suppliesSubView='bom'; render(); });
+  v.querySelectorAll('[data-action="new-bom"]').forEach(b=>b.addEventListener('click', ()=>openBomBuilder(null)));
+  v.querySelectorAll('[data-action="edit-bom"]').forEach(b=>b.addEventListener('click', ()=>{
+    const bm = STATE.boms.find(x=>x.id==b.dataset.id); if(bm) openBomBuilder(bm);
+  }));
+  v.querySelectorAll('[data-action="delete-bom"]').forEach(b=>b.addEventListener('click', ()=>deleteBom(b.dataset.id)));
+  v.querySelectorAll('[data-action="toggle-bom-active"]').forEach(b=>b.addEventListener('click', ()=>toggleBomActive(b.dataset.id)));
+  v.querySelectorAll('[data-action="back-to-supplies"]').forEach(b=>b.addEventListener('click', ()=>{ STATE.suppliesSubView='list'; render(); }));
+  v.querySelectorAll('[data-action="cancel-bom-builder"]').forEach(b=>b.addEventListener('click', ()=>{ STATE.suppliesSubView='bom'; render(); }));
   v.querySelectorAll('[data-action="edit-supply"]').forEach(b=>b.addEventListener('click', ()=>{
     const s = STATE.supplies.find(x=>x.id==b.dataset.id); if(s) openSupplyBuilder(s);
   }));
