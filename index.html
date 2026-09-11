@@ -405,7 +405,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
-  apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+   apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -416,6 +416,7 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const fsdb = firebase.firestore();
+
 
 /* All the "stores" this app keeps in Firestore. Autoincrement stores get a
    numeric `id` field (kept compatible with the rest of the app, which sorts/
@@ -1208,16 +1209,17 @@ function iconConvert(){return `<svg viewBox="0 0 24 24" fill="none" stroke="curr
 
 function altUnitRowHtml(u, idx, baseUnit){
   u = u || {name:'', unitsPerBase:'', price:''};
-  return `<div class="field-row alt-unit-row" data-idx="${idx}" style="align-items:flex-end">
-    <div class="field"><label>${idx===0?'Sell Also In (Unit)':''}</label>
+  return `<div class="field-row alt-unit-row" data-idx="${idx}" style="align-items:flex-end;border-top:${idx>0?'1px dashed #ddd;padding-top:10px;margin-top:6px':'none'}">
+    <div class="field"><label>Sell Also In (Unit)</label>
       <select class="au-name">${UNITS.map(o=>`<option value="${esc(o)}" ${u.name===o?'selected':''}>${esc(o)}</option>`).join('')}</select>
     </div>
-    <div class="field"><label>${idx===0?`= how many per 1 ${esc(baseUnit)}?`:''}</label>
+    <div class="field"><label>= how many per 1 ${esc(baseUnit)}?</label>
       <input type="number" min="0.0001" step="any" class="au-perbase" value="${u.unitsPerBase||''}" placeholder="e.g. 20">
     </div>
-    <div class="field"><label>${idx===0?'Price per unit (optional)':''}</label>
+    <div class="field"><label>Price per unit (optional)</label>
       <input type="number" min="0" step="0.01" class="au-price" value="${u.price||''}" placeholder="auto if blank">
     </div>
+    <button type="button" class="icon-btn au-calc" title="Calculate main Selling Price from this unit's price × the conversion factor">${iconConvert()}</button>
     <button type="button" class="icon-btn au-remove" title="Remove">${iconTrash()}</button>
   </div>`;
 }
@@ -1232,14 +1234,17 @@ function wireAltUnitsEvents(){
   const reindex = ()=>{
     box.querySelectorAll('.alt-unit-row').forEach((row,i)=>{
       row.dataset.idx = i;
-      const l1 = row.children[0].querySelector('label'); if(l1) l1.textContent = i===0? 'Sell Also In (Unit)':'';
-      const l2 = row.children[1].querySelector('label'); if(l2) l2.textContent = i===0? `= how many per 1 ${esc(baseUnitOf())}?`:'';
-      const l3 = row.children[2].querySelector('label'); if(l3) l3.textContent = i===0? 'Price per unit (optional)':'';
+      row.style.borderTop = i>0? '1px dashed #ddd' : 'none';
+      row.style.paddingTop = i>0? '10px' : '0';
+      row.style.marginTop = i>0? '6px' : '0';
     });
   };
   byId('addAltUnitBtn').addEventListener('click', ()=>{
     byId('altUnitsRows').insertAdjacentHTML('beforeend', altUnitRowHtml(null, box.querySelectorAll('.alt-unit-row').length, baseUnitOf()));
     reindex();
+    const newRow = box.querySelector('.alt-unit-row:last-of-type');
+    if(newRow && newRow.scrollIntoView) newRow.scrollIntoView({behavior:'smooth', block:'center'});
+    toast('New selling-unit row added below — scroll down if you don\'t see it');
   });
   box.addEventListener('click', (e)=>{
     if(e.target.closest('.au-remove')){
@@ -1248,6 +1253,20 @@ function wireAltUnitsEvents(){
       if(rows.length<=1){ row.querySelectorAll('input').forEach(i=>i.value=''); return; }
       row.remove();
       reindex();
+    }
+    const calcBtn = e.target.closest('.au-calc');
+    if(calcBtn){
+      const row = calcBtn.closest('.alt-unit-row');
+      const unitName = row.querySelector('.au-name').value;
+      const perBase = parseFloat(row.querySelector('.au-perbase').value)||0;
+      const unitPrice = parseFloat(row.querySelector('.au-price').value)||0;
+      if(perBase<=0 || unitPrice<=0){
+        toast(`Enter both "${unitName}" price and the per-1-${baseUnitOf()} number first`, 'error');
+        return;
+      }
+      const basePrice = unitPrice * perBase;
+      byId('f_price').value = basePrice;
+      toast(`Selling Price set to ${fmtNum(basePrice)} (${unitPrice} × ${perBase})`);
     }
   });
   byId('f_unit').addEventListener('change', reindex);
@@ -1271,7 +1290,7 @@ function productFormHtml(p){
     <div class="field"><label>Product Name *</label><input type="text" id="f_name" value="${esc(p.name)}" placeholder="e.g. Dangote Cement 50kg Bag, 12mm Iron Rod"></div>
     <div class="field-row">
       <div class="field"><label>Category *</label><select id="f_category">${CATEGORIES.map(c=>`<option ${p.category===c?'selected':''}>${esc(c)}</option>`).join('')}</select></div>
-      <div class="field"><label>Unit *</label><select id="f_unit">${UNITS.map(u=>`<option ${p.unit===u?'selected':''}>${esc(u)}</option>`).join('')}</select></div>
+      <div class="field"><label>Unit * <span class="hint" style="font-weight:400">(the bulk/received unit, e.g. Ton, Box — stock is tracked in this)</span></label><select id="f_unit">${UNITS.map(u=>`<option ${p.unit===u?'selected':''}>${esc(u)}</option>`).join('')}</select></div>
     </div>
     <div class="field-row">
       <div class="field"><label>SKU / Code</label><input type="text" id="f_sku" value="${esc(p.sku)}" placeholder="optional"></div>
@@ -1287,7 +1306,7 @@ function productFormHtml(p){
     </div>
     ${p.id? `<div class="hint">To change stock quantity, use the "Adjust Stock" action instead — it keeps an audit log.</div>` : ''}
     <div class="field" style="margin-top:10px">
-      <label>Additional Selling Units <span class="hint" style="font-weight:400">(e.g. sell by the Piece even though it's stocked/supplied by the ${esc(p.unit)})</span></label>
+      <label>Additional Selling Units <span class="hint" style="font-weight:400">(smaller retail units, e.g. sell by the Bag/Piece even though it's stocked/supplied by the ${esc(p.unit)}). Fill this unit's own price, then tap ${iconConvert()} to auto-fill the main Selling Price above.</span></label>
       <div id="altUnitsBox">${renderAltUnitsBox(p.altUnits, p.unit)}</div>
     </div>
     <div class="field" style="margin-top:8px"><label>Notes</label><textarea id="f_notes" rows="2">${esc(p.notes)}</textarea></div>
