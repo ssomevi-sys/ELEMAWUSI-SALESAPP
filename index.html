@@ -417,7 +417,6 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const fsdb = firebase.firestore();
 
-
 /* All the "stores" this app keeps in Firestore. Autoincrement stores get a
    numeric `id` field (kept compatible with the rest of the app, which sorts/
    compares by `id`). 'users' is keyed by username, 'settings' by a fixed key. */
@@ -1213,13 +1212,13 @@ function altUnitRowHtml(u, idx, baseUnit){
     <div class="field"><label>Sell Also In (Unit)</label>
       <select class="au-name">${UNITS.map(o=>`<option value="${esc(o)}" ${u.name===o?'selected':''}>${esc(o)}</option>`).join('')}</select>
     </div>
-    <div class="field"><label>= how many per 1 ${esc(baseUnit)}?</label>
-      <input type="number" min="0.0001" step="any" class="au-perbase" value="${u.unitsPerBase||''}" placeholder="e.g. 20">
+    <div class="field"><label>1 of this unit = how many ${esc(baseUnit)}?</label>
+      <input type="number" min="0.0001" step="any" class="au-perbase" value="${u.unitsPerBase||''}" placeholder="e.g. 125">
     </div>
     <div class="field"><label>Price per unit (optional)</label>
       <input type="number" min="0" step="0.01" class="au-price" value="${u.price||''}" placeholder="auto if blank">
     </div>
-    <button type="button" class="icon-btn au-calc" title="Calculate main Selling Price from this unit's price × the conversion factor">${iconConvert()}</button>
+    <button type="button" class="icon-btn au-calc" title="Know this unit's price already? Tap to back-calculate the main Selling Price (this price ÷ the conversion number)">${iconConvert()}</button>
     <button type="button" class="icon-btn au-remove" title="Remove">${iconTrash()}</button>
   </div>`;
 }
@@ -1261,12 +1260,12 @@ function wireAltUnitsEvents(){
       const perBase = parseFloat(row.querySelector('.au-perbase').value)||0;
       const unitPrice = parseFloat(row.querySelector('.au-price').value)||0;
       if(perBase<=0 || unitPrice<=0){
-        toast(`Enter both "${unitName}" price and the per-1-${baseUnitOf()} number first`, 'error');
+        toast(`Enter both "${unitName}" price and how many ${baseUnitOf()} it equals first`, 'error');
         return;
       }
-      const basePrice = unitPrice * perBase;
+      const basePrice = unitPrice / perBase;
       byId('f_price').value = basePrice;
-      toast(`Selling Price set to ${fmtNum(basePrice)} (${unitPrice} × ${perBase})`);
+      toast(`Selling Price set to ${fmtNum(basePrice)} (${unitPrice} ÷ ${perBase})`);
     }
   });
   byId('f_unit').addEventListener('change', reindex);
@@ -1290,7 +1289,7 @@ function productFormHtml(p){
     <div class="field"><label>Product Name *</label><input type="text" id="f_name" value="${esc(p.name)}" placeholder="e.g. Dangote Cement 50kg Bag, 12mm Iron Rod"></div>
     <div class="field-row">
       <div class="field"><label>Category *</label><select id="f_category">${CATEGORIES.map(c=>`<option ${p.category===c?'selected':''}>${esc(c)}</option>`).join('')}</select></div>
-      <div class="field"><label>Unit * <span class="hint" style="font-weight:400">(the bulk/received unit, e.g. Ton, Box — stock is tracked in this)</span></label><select id="f_unit">${UNITS.map(u=>`<option ${p.unit===u?'selected':''}>${esc(u)}</option>`).join('')}</select></div>
+      <div class="field"><label>Unit * <span class="hint" style="font-weight:400">(smallest unit you count stock in, e.g. Bag, Piece)</span></label><select id="f_unit">${UNITS.map(u=>`<option ${p.unit===u?'selected':''}>${esc(u)}</option>`).join('')}</select></div>
     </div>
     <div class="field-row">
       <div class="field"><label>SKU / Code</label><input type="text" id="f_sku" value="${esc(p.sku)}" placeholder="optional"></div>
@@ -1306,7 +1305,7 @@ function productFormHtml(p){
     </div>
     ${p.id? `<div class="hint">To change stock quantity, use the "Adjust Stock" action instead — it keeps an audit log.</div>` : ''}
     <div class="field" style="margin-top:10px">
-      <label>Additional Selling Units <span class="hint" style="font-weight:400">(smaller retail units, e.g. sell by the Bag/Piece even though it's stocked/supplied by the ${esc(p.unit)}). Fill this unit's own price, then tap ${iconConvert()} to auto-fill the main Selling Price above.</span></label>
+      <label>Additional Selling Units <span class="hint" style="font-weight:400">(bulk units you also sell in, e.g. sell by the Ton even though stock is counted in ${esc(p.unit)}). Leave a unit's price blank to auto-calculate it from the main Selling Price, or tap ${iconConvert()} to do the reverse (set the main Selling Price from this unit's known price).</span></label>
       <div id="altUnitsBox">${renderAltUnitsBox(p.altUnits, p.unit)}</div>
     </div>
     <div class="field" style="margin-top:8px"><label>Notes</label><textarea id="f_notes" rows="2">${esc(p.notes)}</textarea></div>
@@ -2391,17 +2390,18 @@ function sellUnitsFor(p){
   if(!p) return [];
   const base = {name:p.unit, unitsPerBase:1, price:Number(p.sellingPrice)};
   const alts = (p.altUnits||[]).map(u=>({name:u.name, unitsPerBase:Number(u.unitsPerBase)||1,
-    price: (u.price!=null && u.price!=='') ? Number(u.price) : (Number(p.sellingPrice)/(Number(u.unitsPerBase)||1))}));
+    price: (u.price!=null && u.price!=='') ? Number(u.price) : (Number(p.sellingPrice)*(Number(u.unitsPerBase)||1))}));
   return [base, ...alts];
 }
 function unitInfoFor(p, unitName){
   return sellUnitsFor(p).find(u=>u.name===unitName) || sellUnitsFor(p)[0];
 }
 // Converts a quantity sold in `unitName` into the equivalent quantity in the product's base stock unit.
+// unitsPerBase = how many base units (e.g. bags) ONE of this unit (e.g. 1 ton) is worth. Base unit itself is always 1.
 function toBaseQty(p, unitName, qty){
   const info = unitInfoFor(p, unitName);
   if(!info) return Number(qty)||0;
-  return (Number(qty)||0) / (info.unitsPerBase||1);
+  return (Number(qty)||0) * (info.unitsPerBase||1);
 }
 /* ---------------- Bill of Materials / Kits ----------------
    A BOM turns a "kit" product into a bundle of component products. The kit product
