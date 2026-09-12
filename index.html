@@ -405,7 +405,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
-   apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+    apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -416,6 +416,7 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const fsdb = firebase.firestore();
+
 
 /* All the "stores" this app keeps in Firestore. Autoincrement stores get a
    numeric `id` field (kept compatible with the rest of the app, which sorts/
@@ -2649,27 +2650,28 @@ function wireProductSearch(container, onSelect){
     input.select();
     showList(input, '');
   });
-  // Prevent the input from losing focus when a dropdown item is pressed — otherwise the
-  // focusout handler below can hide the list before the click actually registers on it,
-  // which is exactly what caused "clicking a product in the list does nothing".
+  const selectItem = (item)=>{
+    const list = item.closest('.prod-search-list');
+    const rowId = list.dataset.row, role = list.dataset.role;
+    const input = container.querySelector(`.prod-search-input[data-role="${role}"][data-row="${rowId}"]`);
+    const p = STATE.products.find(x=>x.id==item.dataset.id);
+    if(input && p){ input.value = productLabel(p); input.dataset.selected = p.id; }
+    list.classList.remove('show'); list.innerHTML='';
+    onSelect(rowId, item.dataset.id);
+  };
+  // Selection happens here (on press-down) rather than waiting for 'click', because on some
+  // mobile browsers preventDefault() on touchstart stops the browser from ever firing the
+  // follow-up synthetic click — which used to make tapping a product silently do nothing.
   container.addEventListener('mousedown', (e)=>{
-    if(e.target.closest('.prod-search-item')) e.preventDefault();
+    const item = e.target.closest('.prod-search-item');
+    if(item){ e.preventDefault(); selectItem(item); }
   });
   container.addEventListener('touchstart', (e)=>{
-    if(e.target.closest('.prod-search-item')) e.preventDefault();
+    const item = e.target.closest('.prod-search-item');
+    if(item){ e.preventDefault(); selectItem(item); }
   }, {passive:false});
   container.addEventListener('click', (e)=>{
-    const item = e.target.closest('.prod-search-item');
-    if(item){
-      const list = item.closest('.prod-search-list');
-      const rowId = list.dataset.row, role = list.dataset.role;
-      const input = container.querySelector(`.prod-search-input[data-role="${role}"][data-row="${rowId}"]`);
-      const p = STATE.products.find(x=>x.id==item.dataset.id);
-      if(input && p){ input.value = productLabel(p); input.dataset.selected = p.id; }
-      list.classList.remove('show'); list.innerHTML='';
-      onSelect(rowId, item.dataset.id);
-      return;
-    }
+    if(e.target.closest('.prod-search-item')) return; // already handled on press-down above
     if(!e.target.closest('.prod-search-wrap')){
       container.querySelectorAll('.prod-search-list.show').forEach(l=>{ l.classList.remove('show'); l.innerHTML=''; });
     }
