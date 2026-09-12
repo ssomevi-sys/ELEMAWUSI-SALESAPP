@@ -65,8 +65,9 @@ body{
   -webkit-font-smoothing:antialiased;
 }
 h1,h2,h3,h4{font-family:var(--font-display);font-weight:600;letter-spacing:.2px;margin:0;}
-button{font-family:inherit;cursor:pointer;}
-input,select,textarea{font-family:inherit;font-size:14px;}
+button{font-family:inherit;cursor:pointer;touch-action:manipulation;}
+input,select,textarea{font-family:inherit;font-size:14px;touch-action:manipulation;}
+a{touch-action:manipulation;}
 ::selection{background:var(--aluminium);color:#111;}
 :focus-visible{outline:2px solid var(--primary);outline-offset:1px;}
 a{color:var(--primary);}
@@ -96,7 +97,7 @@ a{color:var(--primary);}
 .sidebar-logo-badge{background:#fff;border-radius:10px;padding:6px 9px;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(0,0,0,.25);}
 .sidebar-logo-badge img{max-width:92px;width:100%;height:auto;display:block;}
 .login-logo{display:block;max-width:120px;width:100%;height:auto;margin:0 auto 6px;}
-nav.mainnav{flex:1;padding:14px 10px;overflow-y:auto;}
+nav.mainnav{flex:1;padding:14px 10px;overflow-y:auto;-webkit-overflow-scrolling:touch;}
 #branchSwitcher{padding:12px 14px 4px;}
 .branch-switch{display:flex;flex-direction:column;gap:6px;}
 .branch-btn{display:flex;align-items:center;gap:8px;width:100%;padding:9px 10px;border:1px solid rgba(255,255,255,.12);
@@ -193,7 +194,7 @@ tbody tr:hover{background:var(--surface-2);}
 .num,.mono{font-family:var(--font-mono);}
 .right{text-align:right;}
 .center{text-align:center;}
-.table-wrap{overflow-x:auto;}
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}
 .empty-row td{text-align:center;color:var(--ink-faint);padding:36px 12px;}
 
 .badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;text-transform:uppercase;letter-spacing:.3px;}
@@ -204,7 +205,7 @@ tbody tr:hover{background:var(--surface-2);}
 .badge-info{background:var(--primary-light);color:var(--primary-dark);}
 .badge-display{padding:8px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13.5px;font-weight:700;font-family:var(--font-mono);}
 .prod-search-wrap{position:relative;}
-.prod-search-list{position:absolute;top:calc(100% + 2px);left:0;right:0;z-index:60;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);max-height:230px;overflow-y:auto;box-shadow:var(--shadow);display:none;}
+.prod-search-list{position:absolute;top:calc(100% + 2px);left:0;right:0;z-index:60;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);max-height:230px;overflow-y:auto;-webkit-overflow-scrolling:touch;box-shadow:var(--shadow);display:none;}
 .prod-search-list.show{display:block;}
 .prod-search-item{padding:8px 10px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border-soft);}
 .prod-search-item:last-child{border-bottom:none;}
@@ -220,7 +221,7 @@ tbody tr:hover{background:var(--surface-2);}
 @keyframes pop{from{transform:translateY(6px);opacity:0}to{transform:translateY(0);opacity:1}}
 .modal-header{padding:16px 20px;border-bottom:1px solid var(--border-soft);display:flex;align-items:center;justify-content:space-between;}
 .modal-header h3{font-size:19px;}
-.modal-body{padding:18px 20px;max-height:70vh;overflow-y:auto;}
+.modal-body{padding:18px 20px;max-height:70vh;overflow-y:auto;-webkit-overflow-scrolling:touch;}
 .modal-footer{padding:14px 20px;border-top:1px solid var(--border-soft);display:flex;justify-content:flex-end;gap:10px;}
 
 /* toast */
@@ -273,6 +274,28 @@ tbody tr:hover{background:var(--surface-2);}
   #menuToggle{display:inline-flex;}
   #view{padding:16px;}
   .modal-box{max-width:100%;}
+  /* iOS Safari auto-zooms the whole page when a focused input's font is under 16px —
+     bump it up on touch-sized screens so tapping into a field doesn't jerk the viewport. */
+  input[type=text],input[type=number],input[type=date],input[type=tel],input[type=email],input[type=password],select,textarea{
+    font-size:16px;
+  }
+  /* Comfortable tap targets (≥40px) — the desktop sizing is too tight for a fingertip. */
+  .icon-btn{padding:9px;min-width:40px;min-height:40px;justify-content:center;}
+  .icon-btn svg{width:18px;height:18px;}
+  .btn{padding:11px 14px;min-height:40px;}
+  .btn-sm{padding:9px 12px;min-height:38px;}
+  .tabbtn{padding:11px 14px;min-height:40px;}
+  #topbar{padding:0 14px;}
+  #topbar .page-title{font-size:18px;}
+  .modal-overlay{padding:0;align-items:stretch;}
+  .modal-box{border-radius:0;min-height:100%;}
+  .modal-body{max-height:calc(100vh - 128px);}
+}
+@media (max-width:480px){
+  .card .value{font-size:22px;}
+  .panel-head h3{font-size:16px;}
+  .section-title-row h2{font-size:17px;}
+  .invoice-meta,.invoice-parties{font-size:12px;}
 }
 .overlay-scrim{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:39;}
 .overlay-scrim.show{display:block;}
@@ -405,7 +428,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
-    apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+   apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -416,7 +439,6 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const fsdb = firebase.firestore();
-
 
 /* All the "stores" this app keeps in Firestore. Autoincrement stores get a
    numeric `id` field (kept compatible with the rest of the app, which sorts/
