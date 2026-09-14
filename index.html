@@ -213,7 +213,7 @@ tbody tr:hover{background:var(--surface-2);}
 .prod-search-empty{padding:8px 10px;color:var(--ink-faint);font-size:12.5px;}
 
 /* modal */
-#modalRoot{position:fixed;inset:0;display:none;align-items:flex-start;justify-content:center;z-index:100;}
+#modalRoot{position:fixed;inset:0;display:none;align-items:flex-start;justify-content:center;z-index:800;}
 #modalRoot.open{display:flex;}
 .modal-overlay{position:fixed;inset:0;background:rgba(15,20,26,.55);display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;padding:40px 16px;z-index:800;}
 .modal-box{background:#fff;border-radius:var(--radius);width:100%;max-width:640px;box-shadow:0 20px 60px rgba(0,0,0,.3);animation:pop .14s ease-out;}
@@ -225,7 +225,7 @@ tbody tr:hover{background:var(--surface-2);}
 .modal-footer{padding:14px 20px;border-top:1px solid var(--border-soft);display:flex;justify-content:flex-end;gap:10px;}
 
 /* toast */
-#toastRoot{position:fixed;bottom:20px;right:20px;z-index:200;display:flex;flex-direction:column;gap:8px;}
+#toastRoot{position:fixed;bottom:20px;right:20px;z-index:900;display:flex;flex-direction:column;gap:8px;}
 .toast{background:#1D2733;color:#fff;padding:11px 16px;border-radius:8px;font-size:13.5px;box-shadow:0 8px 24px rgba(0,0,0,.25);
   opacity:0;transform:translateY(8px);transition:opacity .2s,transform .2s;max-width:320px;border-left:4px solid var(--primary);}
 .toast.show{opacity:1;transform:translateY(0);}
@@ -428,7 +428,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
-  apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+   apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
