@@ -215,7 +215,7 @@ tbody tr:hover{background:var(--surface-2);}
 /* modal */
 #modalRoot{position:fixed;inset:0;display:none;align-items:flex-start;justify-content:center;z-index:100;}
 #modalRoot.open{display:flex;}
-.modal-overlay{position:fixed;inset:0;background:rgba(15,20,26,.55);display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;padding:40px 16px;}
+.modal-overlay{position:fixed;inset:0;background:rgba(15,20,26,.55);display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;padding:40px 16px;z-index:800;}
 .modal-box{background:#fff;border-radius:var(--radius);width:100%;max-width:640px;box-shadow:0 20px 60px rgba(0,0,0,.3);animation:pop .14s ease-out;}
 .modal-box.wide{max-width:900px;}
 @keyframes pop{from{transform:translateY(6px);opacity:0}to{transform:translateY(0);opacity:1}}
