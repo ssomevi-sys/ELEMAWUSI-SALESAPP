@@ -1614,14 +1614,27 @@ function productFormHtml(p){
 function printBarcodeLabels(products){
   const withCode = products.filter(p=>p.barcode);
   if(!withCode.length){ toast("None of these products have a barcode yet — open and save each one once to auto-generate it","error"); return; }
-  const w = window.open('', '_blank');
-  if(!w){ toast('Please allow pop-ups to print labels','error'); return; }
-  const labels = withCode.map(p=>`
-    <div class="label">
+  if(typeof JsBarcode==='undefined'){ toast('Barcode library still loading — wait a second and try again','error'); return; }
+  // Render each barcode's actual bars right here on the main page (where the library is
+  // definitely loaded), then hand the print window finished SVG markup — rather than asking
+  // a brand-new blank window to fetch and run the barcode library itself, which is what was
+  // silently failing (blocked/slow CDN load, or timing) and left labels with no bars.
+  const labels = withCode.map(p=>{
+    const tempSvg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+    try{
+      JsBarcode(tempSvg, p.barcode, {format:'CODE128', width:1.6, height:38, displayValue:true, fontSize:11, margin:2});
+    }catch(e){
+      console.error('Barcode render failed for', p.name, e);
+      return `<div class="label"><div class="pname">${esc(p.name)}</div><div class="pprice">${money(p.sellingPrice)}</div><div class="hint">(barcode failed to render)</div></div>`;
+    }
+    return `<div class="label">
       <div class="pname">${esc(p.name)}</div>
       <div class="pprice">${money(p.sellingPrice)}</div>
-      <svg class="bc" data-code="${esc(p.barcode)}"></svg>
-    </div>`).join('');
+      ${tempSvg.outerHTML}
+    </div>`;
+  }).join('');
+  const w = window.open('', '_blank');
+  if(!w){ toast('Please allow pop-ups to print labels','error'); return; }
   w.document.write(`<!DOCTYPE html><html><head><title>Barcode Labels</title>
     <style>
       body{font-family:Arial,sans-serif;margin:0;padding:10px;}
@@ -1631,17 +1644,8 @@ function printBarcodeLabels(products){
       .pprice{font-size:11px;margin-bottom:4px;}
       @media print{ .label{border:none;} }
     </style>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/JsBarcode/3.11.6/JsBarcode.all.min.js"><\/script>
     </head><body><div class="sheet">${labels}</div>
-    <script>
-      window.onload = function(){
-        document.querySelectorAll('.bc').forEach(function(svg){
-          var code = svg.getAttribute('data-code');
-          try{ JsBarcode(svg, code, {format:'CODE128', width:1.6, height:38, displayValue:true, fontSize:11, margin:2}); }catch(e){}
-        });
-        setTimeout(function(){ window.print(); }, 300);
-      };
-    <\/script>
+    <script>setTimeout(function(){ window.print(); }, 200);<\/script>
     </body></html>`);
   w.document.close();
   if(withCode.length < products.length) toast(`Printed ${withCode.length} label(s) — ${products.length-withCode.length} product(s) had no barcode yet`);
