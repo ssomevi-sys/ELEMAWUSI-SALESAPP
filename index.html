@@ -496,7 +496,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
-  apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+ apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -512,7 +512,7 @@ const fsdb = firebase.firestore();
    numeric `id` field (kept compatible with the rest of the app, which sorts/
    compares by `id`). 'users' is keyed by username, 'settings' by a fixed key. */
 const AUTOINC_STORES = ['products','sales','priceHistory','stockLog','expenditures','stockTransport',
-  'deliveries','deposits','internalUsage','stockTransfers','supplies','customerCredit','returns','unitConversions','boms'];
+  'deliveries','deposits','internalUsage','stockTransfers','supplies','customerCredit','returns','unitConversions','boms','activityLog'];
 const KEYED_STORES = { users:'username', settings:'key' };
 
 /* ---------------- state ---------------- */
@@ -528,7 +528,7 @@ const BRANCHES = {
   ]}
 };
 let STATE = {
-  products: [], sales: [], priceHistory: [], stockLog: [], expenditures: [], stockTransport: [], deliveries: [], internalUsage: [], settings: null, users: [], deposits: [], stockTransfers: [], supplies: [], customerCredit: [], returns: [], unitConversions: [], boms: [],
+  products: [], sales: [], priceHistory: [], stockLog: [], expenditures: [], stockTransport: [], deliveries: [], internalUsage: [], settings: null, users: [], deposits: [], stockTransfers: [], supplies: [], customerCredit: [], returns: [], unitConversions: [], boms: [], activityLog: [],
   currentUser: null, // {username, fullName, role}
   currentBranch: 'main', // main | annex
   tab: 'dashboard',
@@ -708,6 +708,17 @@ async function sha256(str){
   }
   return 'fb'+h1.toString(16).padStart(8,'0')+h2.toString(16).padStart(8,'0')+str.length.toString(16);
 }
+async function logActivity(action, details){
+  try{
+    await putRec('activityLog', {
+      action, details: details||'',
+      username: STATE.currentUser?.username || 'system',
+      fullName: STATE.currentUser?.fullName || STATE.currentUser?.username || 'System',
+      branch: STATE.currentBranch || 'main',
+      date: new Date().toISOString()
+    });
+  }catch(e){ console.error('logActivity failed', e); } // never let logging break the real action
+}
 function hashPassword(username, password){ return sha256(`${username.toLowerCase()}::${password}`); }
 // Recovery codes use their own hash namespace ('rc::') so a leaked/guessed password hash can
 // never be reused as a recovery code and vice versa.
@@ -855,9 +866,17 @@ async function doLogin(){
     if(!db){ errBox.textContent='Still starting up — please wait a second and try again.'; errBox.classList.add('show'); return; }
     btn.disabled = true;
     const user = STATE.users.find(u=>u.username.toLowerCase()===username.toLowerCase());
-    if(!user || user.active===false){ errBox.textContent='Account not found or has been deactivated.'; errBox.classList.add('show'); return; }
+    if(!user || user.active===false){
+      errBox.textContent='Account not found or has been deactivated.'; errBox.classList.add('show');
+      await putRec('activityLog', {action:'Failed Login', details:`Unknown/deactivated username "${username}"`, username:username||'unknown', fullName:username||'Unknown', branch:STATE.currentBranch||'main', date:new Date().toISOString()});
+      return;
+    }
     const hash = await hashPassword(user.username, password);
-    if(hash !== user.passwordHash){ errBox.textContent='Incorrect username or password.'; errBox.classList.add('show'); return; }
+    if(hash !== user.passwordHash){
+      errBox.textContent='Incorrect username or password.'; errBox.classList.add('show');
+      await putRec('activityLog', {action:'Failed Login', details:'Incorrect password', username:user.username, fullName:user.fullName||user.username, branch:user.branch||'main', date:new Date().toISOString()});
+      return;
+    }
     const userBranch = user.branch||'main';
     const isSuperAdmin = user.role==='admin' && userBranch==='main';
     const chosenBranch = byId('login_branch')?.value;
@@ -867,6 +886,8 @@ async function doLogin(){
     STATE.currentUser = {username:user.username, fullName:user.fullName, role:user.role, branch:userBranch, isSuperAdmin};
     localStorage.setItem(SESSION_KEY, user.username);
     enterApp();
+    resetInactivityTimer();
+    await logActivity('Login', 'Signed in');
     if(!isSuperAdmin && chosenBranch && chosenBranch!==effectiveBranch){
       toast(`This account belongs to ${branchName(effectiveBranch)} — signed in there`);
     }
@@ -879,6 +900,8 @@ async function doLogin(){
   }
 }
 function doLogout(){
+  if(STATE.currentUser) logActivity('Logout', 'Signed out');
+  clearTimeout(inactivityTimer);
   STATE.currentUser = null;
   localStorage.removeItem(SESSION_KEY);
   closeSidebar();
@@ -913,6 +936,7 @@ function openChangePasswordModal(){
     if(newP!==confP){ toast('New passwords do not match','error'); return; }
     user.passwordHash = await hashPassword(user.username, newP);
     await putRec('users', user);
+    await logActivity('Change Password', `Password changed for "${user.username}"`);
     await refreshAll();
     closeModal();
     toast('Password updated');
@@ -923,6 +947,7 @@ function openChangePasswordModal(){
     user.recoveryCodeHash = await hashRecoveryCode(user.username, code);
     user.recoveryCodeSetAt = new Date().toISOString();
     await putRec('users', user);
+    await logActivity('Generate Recovery Code', `New recovery code generated for "${user.username}"`);
     await refreshAll();
     showRecoveryCodeOnce(code);
   });
@@ -959,6 +984,7 @@ function openForgotPassword(){
     if(newP!==confP){ toast('New passwords do not match','error'); return; }
     user.passwordHash = await hashPassword(user.username, newP);
     await putRec('users', user);
+    await putRec('activityLog', {action:'Password Reset via Recovery Code', details:`Password reset for "${user.username}"`, username:user.username, fullName:user.fullName||user.username, branch:user.branch||'main', date:new Date().toISOString()});
     await refreshAll();
     closeModal();
     toast('Password reset — you can now sign in with your new password');
@@ -978,6 +1004,23 @@ async function ensureSettings(){
   if(!Array.isArray(s.customUnits)) s.customUnits = [];
   STATE.settings = s;
 }
+/* ---------------- auto-logout after inactivity ---------------- */
+const INACTIVITY_LIMIT_MS = 20*60*1000; // 20 minutes
+let inactivityTimer = null;
+function resetInactivityTimer(){
+  clearTimeout(inactivityTimer);
+  if(!STATE.currentUser) return;
+  inactivityTimer = setTimeout(()=>{
+    if(STATE.currentUser){
+      doLogout();
+      toast('You were signed out after 20 minutes of inactivity, for security.');
+    }
+  }, INACTIVITY_LIMIT_MS);
+}
+['click','keydown','mousemove','touchstart','scroll'].forEach(evt=>{
+  document.addEventListener(evt, ()=>{ if(STATE.currentUser) resetInactivityTimer(); }, {passive:true});
+});
+
 async function refreshAll(){
   STATE.products = (await getAll('products')).sort((a,b)=>a.name.localeCompare(b.name));
   STATE.sales = (await getAll('sales')).sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
@@ -995,6 +1038,7 @@ async function refreshAll(){
   STATE.unitConversions = (await getAll('unitConversions')).sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
   STATE.boms = (await getAll('boms')).sort((a,b)=>a.id-b.id);
   STATE.users = (await getAll('users')).sort((a,b)=>a.username.localeCompare(b.username));
+  STATE.activityLog = (await getAll('activityLog')).sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id).slice(0,500);
 }
 
 function updateOnlineStatus(){
@@ -1021,6 +1065,7 @@ const NAV_ITEMS = [
   {tab:'credit', label:'Customer Credit', icon:'M4 4h16v12H4zM4 9h16M8 15v2M12 15v2'},
   {tab:'pricing', label:'Price Management', icon:'M20 12l-8 8-9-9V3h8l9 9z M7 7h.01'},
   {tab:'reports', label:'Reports', icon:'M4 20V10M11 20V4M18 20v-7', adminOnly:true},
+  {tab:'activity', label:'Activity Log', icon:'M12 8v4l3 3M12 2a10 10 0 100 20 10 10 0 000-20z', adminOnly:true},
   {tab:'expenditure', label:'Expenditure', icon:'M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6', adminOnly:true},
   {tab:'users', label:'Users', icon:'M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75', adminOnly:true},
   {tab:'settings', label:'Settings', icon:'M12 15a3 3 0 100-6 3 3 0 000 6z M19.4 15a1.7 1.7 0 00.34 1.87l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.7 1.7 0 00-1.87-.34 1.7 1.7 0 00-1 1.56V21a2 2 0 11-4 0v-.09a1.7 1.7 0 00-1-1.55 1.7 1.7 0 00-1.87.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.7 1.7 0 00.33-1.87 1.7 1.7 0 00-1.55-1H3a2 2 0 110-4h.09a1.7 1.7 0 001.55-1 1.7 1.7 0 00-.33-1.87l-.06-.06a2 2 0 112.83-2.83l.06.06a1.7 1.7 0 001.87.33H9a1.7 1.7 0 001-1.55V3a2 2 0 114 0v.09a1.7 1.7 0 001 1.55 1.7 1.7 0 001.87-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.7 1.7 0 00-.34 1.87V9a1.7 1.7 0 001.56 1H21a2 2 0 110 4h-.09a1.7 1.7 0 00-1.51 1z', adminOnly:true, superAdminOnly:true},
@@ -1077,7 +1122,7 @@ function setActiveNav(tab){
 function openSidebar(){ byId('sidebar').classList.add('open'); byId('scrim').classList.add('show'); }
 function closeSidebar(){ byId('sidebar').classList.remove('open'); byId('scrim').classList.remove('show'); }
 
-const TITLES = {dashboard:'Dashboard', overview:'Combined Overview', inventory:'Inventory', supplies:'Purchases', transfers:'Stock Transfers', sales:'Sales', deposits:'Customer Deposits', credit:'Customer Credit', pricing:'Price Management', reports:'Reports', expenditure:'Expenditure', settings:'Settings', users:'Users'};
+const TITLES = {dashboard:'Dashboard', overview:'Combined Overview', inventory:'Inventory', supplies:'Purchases', transfers:'Stock Transfers', sales:'Sales', deposits:'Customer Deposits', credit:'Customer Credit', pricing:'Price Management', reports:'Reports', activity:'Activity Log', expenditure:'Expenditure', settings:'Settings', users:'Users'};
 function navigate(tab){
   if(STATE.currentUser && STATE.currentUser.role==='sales_rep' && tab!=='sales' && tab!=='deposits' && tab!=='credit' && tab!=='transfers') tab='sales';
   if(STATE.currentUser && STATE.currentUser.role==='admin' && !STATE.currentUser.isSuperAdmin && (tab==='settings' || tab==='overview')) tab='dashboard';
@@ -1100,6 +1145,7 @@ function render(){
   else if(STATE.tab==='credit') v.innerHTML = renderCustomerCredit();
   else if(STATE.tab==='pricing') v.innerHTML = renderPricing();
   else if(STATE.tab==='reports') v.innerHTML = renderReports();
+  else if(STATE.tab==='activity') v.innerHTML = renderActivityLog();
   else if(STATE.tab==='expenditure') v.innerHTML = renderExpenditure();
   else if(STATE.tab==='settings') v.innerHTML = renderSettings();
   else if(STATE.tab==='users') v.innerHTML = renderUsers();
@@ -1141,7 +1187,7 @@ function closeModal(){ byId('modalRoot').classList.remove('open'); byId('modalRo
 function computeBranchMetrics(branchId){
   const now = new Date();
   const inThisBranch = (x)=> (x.branch||'main')===branchId;
-  const products = STATE.products.filter(inThisBranch);
+  const products = activeProducts().filter(inThisBranch);
   const lowStock = products.filter(p=> Number(p.stockQty) <= Number(p.reorderLevel||0));
   const activeSales = STATE.sales.filter(s=> inThisBranch(s) && s.status!=='void');
   const thisMonthSales = activeSales.filter(s=>{ const d=new Date(s.date); return d.getMonth()===now.getMonth() && d.getFullYear()===now.getFullYear(); });
@@ -1227,7 +1273,7 @@ function renderCombinedOverview(){
   `;
 }
 function renderDashboard(){
-  const branchProducts = STATE.products.filter(inBranch);
+  const branchProducts = activeProducts().filter(inBranch);
   const totalProducts = branchProducts.length;
   const lowStock = branchProducts.filter(p=> Number(p.stockQty) <= Number(p.reorderLevel||0));
   const activeSales = STATE.sales.filter(s=> inBranch(s) && s.status!=='void');
@@ -1315,13 +1361,20 @@ function momoIndicator(s){
    ============================================================ */
 let invFilter = {q:'', category:''};
 let invSearchDebounce = null;
+let actSearchDebounce = null;
+// Products the app should normally show/search (excludes soft-deleted ones, which live in Trash
+// but stay in STATE.products so past sales/purchases referencing them still resolve by id).
+function activeProducts(){ return STATE.products.filter(p=>!p.deletedAt); }
+let invShowTrash = false;
 function renderInventory(){
-  const rows = STATE.products.filter(p=>{
+  const source = invShowTrash ? STATE.products.filter(p=>p.deletedAt) : activeProducts();
+  const rows = source.filter(p=>{
     if(!inBranch(p)) return false;
     const matchQ = !invFilter.q || (p.name+p.sku+p.category).toLowerCase().includes(invFilter.q.toLowerCase());
     const matchC = !invFilter.category || p.category===invFilter.category;
     return matchQ && matchC;
   });
+  const trashCount = STATE.products.filter(p=>p.deletedAt && inBranch(p)).length;
   return `
     <div class="help-box">Viewing inventory for <b>${esc(branchName(STATE.currentBranch))}</b>. Each shop keeps its own separate stock — use Stock Transfers to move goods between Main Shop and ELEMAWUSI ANNEX in either direction. If an item is bought in bulk (Ton, Bag, Box, Kg) but sold in smaller units (Piece, Kg, etc.), use "Convert Units" on that product to break bulk stock down into a sellable-unit product — it deducts from the bulk item and adds to the smaller-unit item automatically.</div>
     <div class="panel">
@@ -1332,10 +1385,14 @@ function renderInventory(){
           ${CATEGORIES.map(c=>`<option value="${esc(c)}" ${invFilter.category===c?'selected':''}>${esc(c)}</option>`).join('')}
         </select>
         <span style="flex:1"></span>
-        <button class="btn" id="conversionHistoryBtn">🔀 Conversion History</button>
-        <button class="btn" id="importCatalogBtn">📥 Import Standard Catalog</button>
-        <button class="btn btn-primary" data-action="add-product">＋ Add Product</button>
+        ${!invShowTrash? `
+          <button class="btn" id="conversionHistoryBtn">🔀 Conversion History</button>
+          <button class="btn" id="importCatalogBtn">📥 Import Standard Catalog</button>
+          <button class="btn btn-primary" data-action="add-product">＋ Add Product</button>
+        `:''}
+        <button class="btn" id="toggleTrashBtn">${invShowTrash? '← Back to Inventory' : `🗑 Trash${trashCount?` (${trashCount})`:''}`}</button>
       </div>
+      ${invShowTrash? `<div class="help-box" style="margin:0 16px 12px">Deleted products land here and can be restored. Nothing here affects stock counts or reports.</div>`:''}
       <div class="table-wrap">
       <table>
         <thead><tr><th>Product</th><th>Category</th><th>SKU</th><th>Unit</th><th class="right">Cost</th><th class="right">Price</th><th class="right">Stock</th><th>Status</th><th></th></tr></thead>
@@ -1352,17 +1409,22 @@ function renderInventory(){
             <td class="right mono">${money(p.sellingPrice)}</td>
             <td class="right mono">${fmtNum(p.stockQty)} ${esc(p.unit)}
               ${stockBreakdownHtml(p)}
-              <span class="stock-bar ${low?'low':''}"><span style="width:${Math.max(6,pct)}%"></span></span>
+              ${invShowTrash?'':`<span class="stock-bar ${low?'low':''}"><span style="width:${Math.max(6,pct)}%"></span></span>`}
             </td>
-            <td>${low? '<span class="badge badge-bad">Low Stock</span>' : '<span class="badge badge-ok">In Stock</span>'}</td>
+            <td>${invShowTrash? '<span class="badge badge-bad">Deleted</span>' : (low? '<span class="badge badge-bad">Low Stock</span>' : '<span class="badge badge-ok">In Stock</span>')}</td>
             <td class="right">
-              <button class="icon-btn" title="Adjust Stock" data-action="adjust-stock" data-id="${p.id}">${iconBox()}</button>
-              <button class="icon-btn" title="Convert Units (e.g. break bulk into smaller units)" data-action="convert-units" data-id="${p.id}">${iconConvert()}</button>
-              <button class="icon-btn" title="Edit" data-action="edit-product" data-id="${p.id}">${iconEdit()}</button>
-              <button class="icon-btn" title="Delete" data-action="delete-product" data-id="${p.id}">${iconTrash()}</button>
+              ${invShowTrash? `
+                <button class="icon-btn" title="Restore" data-action="restore-product" data-id="${p.id}">↩️</button>
+                <button class="icon-btn" title="Delete Permanently" data-action="purge-product" data-id="${p.id}">${iconTrash()}</button>
+              ` : `
+                <button class="icon-btn" title="Adjust Stock" data-action="adjust-stock" data-id="${p.id}">${iconBox()}</button>
+                <button class="icon-btn" title="Convert Units (e.g. break bulk into smaller units)" data-action="convert-units" data-id="${p.id}">${iconConvert()}</button>
+                <button class="icon-btn" title="Edit" data-action="edit-product" data-id="${p.id}">${iconEdit()}</button>
+                <button class="icon-btn" title="Delete" data-action="delete-product" data-id="${p.id}">${iconTrash()}</button>
+              `}
             </td>
           </tr>`;
-        }).join('') : `<tr class="empty-row"><td colspan="9">No products found. Click "Add Product" to get started.</td></tr>`}
+        }).join('') : `<tr class="empty-row"><td colspan="9">${invShowTrash? 'Trash is empty.' : 'No products found. Click "Add Product" to get started.'}</td></tr>`}
         </tbody>
       </table>
       </div>
@@ -1390,6 +1452,45 @@ function stockBreakdownHtml(p){
     `${fmtNum(b.qty)} ${esc(b.name)}${b.remainder>0?` + ${fmtNum(b.remainder)} ${esc(p.unit)}`:''}`
   ).join(' · ')}</div>`;
 }
+/* ============================================================
+   ACTIVITY LOG (admin-only audit trail — who did what, and when)
+   ============================================================ */
+let activityFilter = {q:'', action:''};
+function renderActivityLog(){
+  const rows = (STATE.activityLog||[]).filter(a=>{
+    const matchQ = !activityFilter.q || (a.action+a.details+a.fullName+a.username).toLowerCase().includes(activityFilter.q.toLowerCase());
+    const matchA = !activityFilter.action || a.action===activityFilter.action;
+    return matchQ && matchA;
+  });
+  const actionTypes = [...new Set((STATE.activityLog||[]).map(a=>a.action))].sort();
+  return `
+    <div class="help-box">A running record of important actions — logins, price changes, stock adjustments, deletions, and password/security events — across both shops. Showing the most recent ${STATE.activityLog?.length||0} entries.</div>
+    <div class="panel">
+      <div class="panel-toolbar">
+        <input type="text" id="actSearch" placeholder="Search user, action, details..." style="max-width:260px" value="${esc(activityFilter.q)}">
+        <select id="actType" style="max-width:220px">
+          <option value="">All Actions</option>
+          ${actionTypes.map(a=>`<option value="${esc(a)}" ${activityFilter.action===a?'selected':''}>${esc(a)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>User</th><th>Branch</th><th>Action</th><th>Details</th></tr></thead>
+        <tbody>
+        ${rows.length? rows.map(a=>`<tr>
+          <td class="mono" style="white-space:nowrap">${fmtDateTime(a.date)}</td>
+          <td>${esc(a.fullName||a.username)}</td>
+          <td>${esc(branchName(a.branch))}</td>
+          <td>${a.action.startsWith('Failed')||a.action.startsWith('Delete')||a.action.startsWith('Void')||a.action.startsWith('Permanently')? `<span class="badge badge-bad">${esc(a.action)}</span>` : `<span class="badge badge-muted">${esc(a.action)}</span>`}</td>
+          <td>${esc(a.details)}</td>
+        </tr>`).join('') : `<tr class="empty-row"><td colspan="5">No matching activity recorded.</td></tr>`}
+        </tbody>
+      </table>
+      </div>
+    </div>
+  `;
+}
+
 function iconEdit(){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>`;}
 function iconTrash(){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/></svg>`;}
 function iconBox(){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 8l-9-5-9 5 9 5 9-5zM3 8v8l9 5M21 8v8l-9 5M12 13v8"/></svg>`;}
@@ -1538,7 +1639,9 @@ async function saveProduct(existing){
       productId: existing.id, productName:name, oldPrice:existing.sellingPrice, newPrice:sellingPrice,
       changeType:'Manual edit', changeValue:null, reason:'Edited via Inventory', date: now, branch: rec.branch
     });
+    await logActivity('Price Change', `"${name}": ${money(existing.sellingPrice)} → ${money(sellingPrice)}`);
   }
+  if(!existing) await logActivity('Add Product', `"${name}" added`);
   await refreshAll();
   closeModal();
   toast(existing? 'Product updated' : 'Product added');
@@ -1546,11 +1649,33 @@ async function saveProduct(existing){
 }
 async function deleteProduct(id){
   const p = STATE.products.find(x=>x.id==id); if(!p) return;
-  confirmDialog(`Delete "${p.name}"? This cannot be undone. Past sales records will keep their own copy of this product's details.`, async ()=>{
-    await delRec('products', p.id);
+  confirmDialog(`Move "${p.name}" to Trash? It'll disappear from Inventory and Sales, but you can restore it later — nothing is permanently lost.`, async ()=>{
+    p.deletedAt = new Date().toISOString();
+    await putRec('products', p);
+    await logActivity('Delete Product', `"${p.name}" moved to Trash`);
     await refreshAll();
     closeModal();
-    toast('Product deleted');
+    toast('Product moved to Trash');
+    render();
+  });
+}
+async function restoreProduct(id){
+  const p = STATE.products.find(x=>x.id==id); if(!p) return;
+  delete p.deletedAt;
+  await putRec('products', p);
+  await logActivity('Restore Product', `"${p.name}" restored from Trash`);
+  await refreshAll();
+  toast('Product restored');
+  render();
+}
+function purgeProduct(id){
+  const p = STATE.products.find(x=>x.id==id); if(!p) return;
+  confirmDialog(`Permanently delete "${p.name}"? This cannot be undone. Past sales/purchase records will keep their own copy of this product's details.`, async ()=>{
+    await delRec('products', p.id);
+    await logActivity('Permanently Delete Product', `"${p.name}" deleted forever`);
+    await refreshAll();
+    closeModal();
+    toast('Product permanently deleted');
     render();
   });
 }
@@ -1586,6 +1711,7 @@ function openAdjustStock(id){
     p.stockQty = newStock; p.updatedAt = new Date().toISOString();
     await putRec('products', p);
     await putRec('stockLog', {productId:p.id, productName:p.name, type, qty, resultingStock:newStock, reason, date:new Date().toISOString(), branch:p.branch||'main'});
+    await logActivity('Stock Adjustment', `"${p.name}" ${type==='in'?'+':type==='out'?'-':'set to'}${fmtNum(qty)} ${p.unit} → now ${fmtNum(newStock)}${reason?` (${reason})`:''}`);
     await refreshAll();
     closeModal();
     toast('Stock updated');
@@ -2084,6 +2210,7 @@ async function deleteSupply(id){
       if(p){ p.stockQty = Number(p.stockQty)-toBaseQty(p, it.unit||p.unit, it.qty); p.updatedAt = now; await putRec('products', p); }
     }
     await delRec('supplies', x.id);
+    await logActivity('Delete Purchase', `Invoice "${x.invoiceNo}" from ${x.supplierName} (${money(x.amount)}) permanently deleted`);
     await refreshAll();
     closeModal();
     toast('Purchase record deleted and stock adjusted');
@@ -2263,7 +2390,7 @@ function renderStockTransfers(){
 }
 function transferFormHtml(){
   const otherBranch = STATE.currentBranch==='main' ? 'annex' : 'main';
-  const sendingProducts = STATE.products.filter(p=>(p.branch||'main')===STATE.currentBranch);
+  const sendingProducts = activeProducts().filter(p=>(p.branch||'main')===STATE.currentBranch);
   return `
     <div class="field"><label>Product (from ${esc(branchName(STATE.currentBranch))}) *</label>${productSearchHtml('st_product','x','')}</div>
     <div class="field"><label>Quantity to Transfer *</label><input type="number" min="0" step="0.01" id="st_qty" value=""></div>
@@ -2594,7 +2721,7 @@ function openSaleBuilder(existingSale){
   render();
 }
 function productOptions(selId){
-  let list = STATE.products.filter(inBranch);
+  let list = activeProducts().filter(inBranch);
   if(selId && !list.some(p=>String(p.id)===String(selId))){
     const extra = STATE.products.find(p=>String(p.id)===String(selId));
     if(extra) list = [...list, extra];
@@ -2853,7 +2980,7 @@ function wireProductSearch(container, onSelect){
     const list = container.querySelector(`.prod-search-list[data-role="${role}"][data-row="${rowId}"]`);
     if(!list) return;
     const q = (query||'').trim().toLowerCase();
-    const branchProducts = STATE.products.filter(inBranch);
+    const branchProducts = activeProducts().filter(inBranch);
     const matches = q? branchProducts.filter(p=>p.name.toLowerCase().includes(q)).slice(0,50) : branchProducts.slice(0,200);
     const extraNote = !q && branchProducts.length>200? `<div class="prod-search-empty">Showing first 200 of ${branchProducts.length} — type 1-4 letters to narrow</div>` : '';
     list.innerHTML = (matches.length? matches.map(p=>`<div class="prod-search-item" data-id="${p.id}">${esc(p.name)} <span class="hint">— stock ${fmtNum(p.stockQty)} ${esc(p.unit)}</span></div>`).join('')
@@ -3404,6 +3531,7 @@ async function voidSale(id){
     await putRec('sales', s);
     await removeDeliveryForSale(s.id);
     await reverseDepositUsage(s);
+    await logActivity('Void Sale', `Invoice ${s.invoiceNo} (${money(s.grandTotal)}) voided`);
     await refreshAll();
     closeModal();
     toast('Sale voided');
@@ -3424,6 +3552,7 @@ async function deleteSale(id){
     await delRec('sales', s.id);
     await removeDeliveryForSale(s.id);
     await reverseDepositUsage(s);
+    await logActivity('Delete Sale', `Invoice ${s.invoiceNo} (${money(s.grandTotal)}) permanently deleted`);
     await refreshAll();
     closeModal();
     toast('Sale deleted');
@@ -3854,7 +3983,7 @@ function renderPricing(){
   `;
 }
 function renderCurrentPrices(){
-  const products = STATE.products.filter(inBranch);
+  const products = activeProducts().filter(inBranch);
   return `
     <div class="panel">
       <div class="panel-head"><h3>Product Prices</h3><span class="badge badge-muted">${products.length} products</span></div>
@@ -3911,7 +4040,7 @@ function computeBulkPreview(){
   const op = byId('b_op').value;
   const type = byId('b_type').value;
   const val = parseFloat(byId('b_value').value)||0;
-  const list = STATE.products.filter(p=> inBranch(p) && (!cat || p.category===cat)).map(p=>{
+  const list = activeProducts().filter(p=> inBranch(p) && (!cat || p.category===cat)).map(p=>{
     let delta = type==='percent'? p.sellingPrice*val/100 : val;
     let newPrice = op==='increase'? p.sellingPrice+delta : p.sellingPrice-delta;
     newPrice = Math.max(0, Math.round(newPrice*100)/100);
@@ -3986,6 +4115,20 @@ function renderReports(){
     agg[it.productId].revenue += Number(it.lineTotal);
   }));
   const top = Object.values(agg).sort((a,b)=>b.revenue-a.revenue).slice(0,8);
+  // slow movers: active products with sales in range, sorted lowest quantity sold first, plus products with zero sales at all
+  const soldIds = new Set(Object.keys(agg));
+  const slowSold = Object.entries(agg).map(([id,v])=>({id, name:v.name, qty:v.qty, revenue:v.revenue})).sort((a,b)=>a.qty-b.qty).slice(0,5);
+  const neverSold = activeProducts().filter(p=> inBranch(p) && !soldIds.has(String(p.id))).slice(0,5);
+  // aging: unpaid/partial sales bucketed by days since sale date
+  const agingSales = STATE.sales.filter(s=> inBranch(s) && s.status!=='void' && Number(s.balance)>0);
+  const agingBuckets = [{label:'0–7 days', min:0, max:7, total:0, count:0}, {label:'8–30 days', min:8, max:30, total:0, count:0}, {label:'31–60 days', min:31, max:60, total:0, count:0}, {label:'60+ days', min:61, max:Infinity, total:0, count:0}];
+  const today = new Date();
+  agingSales.forEach(s=>{
+    const days = Math.floor((today - new Date(s.date)) / 86400000);
+    const bucket = agingBuckets.find(b=> days>=b.min && days<=b.max) || agingBuckets[agingBuckets.length-1];
+    bucket.total += Number(s.balance); bucket.count += 1;
+  });
+  const totalOutstanding = agingBuckets.reduce((a,b)=>a+b.total,0);
 
   return `
     <div class="help-box">Reports for <b>${esc(branchName(STATE.currentBranch))}</b>. Switch shops from the sidebar to see the other branch's figures.</div>
@@ -4011,6 +4154,24 @@ function renderReports(){
       <div class="table-wrap">
       <table><thead><tr><th>Product</th><th class="right">Qty Sold</th><th class="right">Revenue</th></tr></thead>
       <tbody>${top.length? top.map(t=>`<tr><td>${esc(t.name)}</td><td class="right mono">${fmtNum(t.qty)}</td><td class="right mono">${money(t.revenue)}</td></tr>`).join('') : `<tr class="empty-row"><td colspan="3">No sales in this date range.</td></tr>`}</tbody></table>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>Slow-Moving Stock</h3><span class="hint">Lowest quantity sold in range, plus products with zero sales</span></div>
+      <div class="table-wrap">
+      <table><thead><tr><th>Product</th><th class="right">Qty Sold</th><th class="right">Revenue</th></tr></thead>
+      <tbody>
+        ${slowSold.map(t=>`<tr><td>${esc(t.name)}</td><td class="right mono">${fmtNum(t.qty)}</td><td class="right mono">${money(t.revenue)}</td></tr>`).join('')}
+        ${neverSold.map(p=>`<tr><td>${esc(p.name)}</td><td class="right mono">0</td><td class="right mono badge badge-bad" style="display:inline-block;margin-top:4px">No sales this period</td></tr>`).join('')}
+        ${(slowSold.length+neverSold.length)===0? `<tr class="empty-row"><td colspan="3">Not enough data yet.</td></tr>`:''}
+      </tbody></table>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>Aging — Unpaid Customer Balances</h3><span class="badge ${totalOutstanding>0?'badge-bad':'badge-ok'}">${money(totalOutstanding)} outstanding</span></div>
+      <div class="table-wrap">
+      <table><thead><tr><th>Age</th><th class="right">Invoices</th><th class="right">Amount Owed</th></tr></thead>
+      <tbody>${agingBuckets.some(b=>b.count)? agingBuckets.map(b=>`<tr><td>${esc(b.label)}</td><td class="right mono">${b.count}</td><td class="right mono ${b.min>=31?'bad':''}">${money(b.total)}</td></tr>`).join('') : `<tr class="empty-row"><td colspan="3">No unpaid balances right now.</td></tr>`}</tbody></table>
       </div>
     </div>
     <div class="panel">
@@ -4797,6 +4958,26 @@ function wireTabEvents(){
   v.querySelectorAll('[data-action="convert-units"]').forEach(b=>b.addEventListener('click', ()=>openConvertUnitsModal(b.dataset.id)));
   v.querySelectorAll('[data-action="edit-product"]').forEach(b=>b.addEventListener('click', ()=>openEditProduct(b.dataset.id)));
   v.querySelectorAll('[data-action="delete-product"]').forEach(b=>b.addEventListener('click', ()=>deleteProduct(b.dataset.id)));
+  v.querySelectorAll('[data-action="restore-product"]').forEach(b=>b.addEventListener('click', ()=>restoreProduct(b.dataset.id)));
+  v.querySelectorAll('[data-action="purge-product"]').forEach(b=>b.addEventListener('click', ()=>purgeProduct(b.dataset.id)));
+  const toggleTrashBtn = byId('toggleTrashBtn'); if(toggleTrashBtn) toggleTrashBtn.addEventListener('click', ()=>{ invShowTrash = !invShowTrash; renderInventoryPartial(); });
+
+  // Activity Log
+  const actSearch = byId('actSearch');
+  if(actSearch) actSearch.addEventListener('input', (e)=>{
+    const val = e.target.value;
+    clearTimeout(actSearchDebounce);
+    actSearchDebounce = setTimeout(()=>{
+      activityFilter.q = val;
+      const caret = e.target.selectionStart;
+      byId('view').innerHTML = renderActivityLog();
+      wireTabEvents();
+      const fresh = byId('actSearch');
+      if(fresh){ fresh.focus(); try{ fresh.setSelectionRange(caret, caret); }catch(_){} }
+    }, 300);
+  });
+  const actType = byId('actType');
+  if(actType) actType.addEventListener('change', (e)=>{ activityFilter.action = e.target.value; byId('view').innerHTML = renderActivityLog(); wireTabEvents(); });
   const invSearch = byId('invSearch');
   if(invSearch) invSearch.addEventListener('input', (e)=>{
     const val = e.target.value;
@@ -4938,7 +5119,7 @@ function wireTabEvents(){
 }
 function renderInventoryPartial(){ byId('view').innerHTML = renderInventory(); wireTabEvents(); }
 async function importStandardCatalog(){
-  const existingNames = new Set(STATE.products.filter(inBranch).map(p=>p.name.trim().toLowerCase()));
+  const existingNames = new Set(activeProducts().filter(inBranch).map(p=>p.name.trim().toLowerCase()));
   const toAdd = STANDARD_CATALOG.filter(it=>!existingNames.has(it.name.trim().toLowerCase()));
   if(toAdd.length===0){ toast("All standard catalog items are already in this shop's inventory"); return; }
   confirmDialog(`This will add ${toAdd.length} new product(s) from the standard item catalog to ${branchName(STATE.currentBranch)}'s inventory${STANDARD_CATALOG.length-toAdd.length>0? ` (skipping ${STANDARD_CATALOG.length-toAdd.length} already present)`:''}. Cost price, selling price and stock quantity will be set to 0 — update them afterward in Inventory. This may take a moment for a large catalog. Continue?`, async ()=>{
