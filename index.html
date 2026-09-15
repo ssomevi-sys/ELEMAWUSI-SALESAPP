@@ -496,7 +496,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
- apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+  apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -1278,7 +1278,7 @@ function renderDashboard(){
       <tbody>
         ${lowStock.length? lowStock.map(p=>`
           <tr><td>${esc(p.name)}</td><td>${esc(p.category)}</td>
-          <td class="right mono">${fmtNum(p.stockQty)} ${esc(p.unit)}</td>
+          <td class="right mono">${fmtNum(p.stockQty)} ${esc(p.unit)}${stockBreakdownHtml(p)}</td>
           <td class="right mono">${fmtNum(p.reorderLevel||0)}</td>
           <td class="right"><button class="btn btn-sm" data-action="adjust-stock" data-id="${p.id}">Restock</button></td></tr>`).join('')
         : `<tr class="empty-row"><td colspan="5">All products are above their reorder level.</td></tr>`}
@@ -1350,7 +1350,8 @@ function renderInventory(){
             <td>${esc(p.unit)}</td>
             <td class="right mono">${money(p.costPrice)}</td>
             <td class="right mono">${money(p.sellingPrice)}</td>
-            <td class="right mono">${fmtNum(p.stockQty)}
+            <td class="right mono">${fmtNum(p.stockQty)} ${esc(p.unit)}
+              ${stockBreakdownHtml(p)}
               <span class="stock-bar ${low?'low':''}"><span style="width:${Math.max(6,pct)}%"></span></span>
             </td>
             <td>${low? '<span class="badge badge-bad">Low Stock</span>' : '<span class="badge badge-ok">In Stock</span>'}</td>
@@ -1367,6 +1368,27 @@ function renderInventory(){
       </div>
     </div>
   `;
+}
+// Expresses a product's stock (held in base units) across every alternate unit defined for it.
+// e.g. 4000 bags with "1 ton = 125 bags" -> [{name:'ton', qty:32, remainder:0}]
+function stockBreakdown(p){
+  if(!p || !Array.isArray(p.altUnits) || !p.altUnits.length) return [];
+  const base = Number(p.stockQty)||0;
+  return p.altUnits.map(u=>{
+    const per = Number(u.unitsPerBase)||0;
+    if(per<=0) return null;
+    const whole = Math.floor(base/per);
+    const remainder = +(base - whole*per).toFixed(4);
+    return {name:u.name, qty:whole, remainder, per};
+  }).filter(Boolean);
+}
+// Short one-line summary of the breakdown, e.g. "32 ton + 0 bag"
+function stockBreakdownHtml(p){
+  const parts = stockBreakdown(p);
+  if(!parts.length) return '';
+  return `<div class="hint" style="margin-top:2px;white-space:nowrap">${parts.map(b=>
+    `${fmtNum(b.qty)} ${esc(b.name)}${b.remainder>0?` + ${fmtNum(b.remainder)} ${esc(p.unit)}`:''}`
+  ).join(' · ')}</div>`;
 }
 function iconEdit(){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>`;}
 function iconTrash(){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/></svg>`;}
