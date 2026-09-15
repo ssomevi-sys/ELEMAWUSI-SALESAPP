@@ -15,6 +15,7 @@
 <!-- SheetJS: only used for the optional "Export to Excel" backup. Loaded from CDN, so that
      button needs an internet connection at least once; every other feature works fully offline. -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/JsBarcode/3.11.6/JsBarcode.all.min.js" defer></script>
 <!-- Firebase (compat SDK — plain <script> tags, no bundler needed).
      This app now stores its data in Firebase Firestore instead of the browser's local
      IndexedDB, so every device that opens it sees the same live data. An internet
@@ -496,7 +497,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
- apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+  apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -1005,7 +1006,7 @@ async function ensureSettings(){
   STATE.settings = s;
 }
 /* ---------------- auto-logout after inactivity ---------------- */
-const INACTIVITY_LIMIT_MS = 20*60*1000; // 20 minutes
+const INACTIVITY_LIMIT_MS = 10*60*1000; // 10 minutes
 let inactivityTimer = null;
 function resetInactivityTimer(){
   clearTimeout(inactivityTimer);
@@ -1013,7 +1014,7 @@ function resetInactivityTimer(){
   inactivityTimer = setTimeout(()=>{
     if(STATE.currentUser){
       doLogout();
-      toast('You were signed out after 20 minutes of inactivity, for security.');
+      toast('You were signed out after 10 minutes of inactivity, for security.');
     }
   }, INACTIVITY_LIMIT_MS);
 }
@@ -1388,6 +1389,7 @@ function renderInventory(){
         ${!invShowTrash? `
           <button class="btn" id="conversionHistoryBtn">🔀 Conversion History</button>
           <button class="btn" id="importCatalogBtn">📥 Import Standard Catalog</button>
+          <button class="btn" id="printAllBarcodesBtn">🏷️ Print Barcode Labels</button>
           <button class="btn btn-primary" data-action="add-product">＋ Add Product</button>
         `:''}
         <button class="btn" id="toggleTrashBtn">${invShowTrash? '← Back to Inventory' : `🗑 Trash${trashCount?` (${trashCount})`:''}`}</button>
@@ -1417,6 +1419,7 @@ function renderInventory(){
                 <button class="icon-btn" title="Restore" data-action="restore-product" data-id="${p.id}">↩️</button>
                 <button class="icon-btn" title="Delete Permanently" data-action="purge-product" data-id="${p.id}">${iconTrash()}</button>
               ` : `
+                <button class="icon-btn" title="Print Barcode Label" data-action="print-barcode" data-id="${p.id}">🏷️</button>
                 <button class="icon-btn" title="Adjust Stock" data-action="adjust-stock" data-id="${p.id}">${iconBox()}</button>
                 <button class="icon-btn" title="Convert Units (e.g. break bulk into smaller units)" data-action="convert-units" data-id="${p.id}">${iconConvert()}</button>
                 <button class="icon-btn" title="Edit" data-action="edit-product" data-id="${p.id}">${iconEdit()}</button>
@@ -1585,6 +1588,13 @@ function productFormHtml(p){
       <div class="field"><label>SKU / Code</label><input type="text" id="f_sku" value="${esc(p.sku)}" placeholder="optional"></div>
       <div class="field"><label>Dimensions / Spec</label><input type="text" id="f_dim" value="${esc(p.dimensions)}" placeholder="e.g. 1.2mm, 8ft length"></div>
     </div>
+    <div class="field">
+      <label>Barcode <span class="hint" style="font-weight:400">(auto-generated if left blank — only fill this in if the product already has a manufacturer barcode you want to reuse)</span></label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="text" id="f_barcode" value="${esc(p.barcode||'')}" placeholder="${p.id? 'auto-generated on save if left blank' : 'leave blank to auto-generate after saving'}" style="flex:1">
+      </div>
+      ${p.barcode? `<div id="barcodePreview" style="margin-top:8px;background:#fff;padding:8px;border:1px solid var(--border);border-radius:var(--radius-sm);display:inline-block"><svg id="barcodeSvg"></svg></div>` : ''}
+    </div>
     <div class="field-row">
       <div class="field"><label>Cost Price (${esc(STATE.settings.currencySymbol)}) *</label><input type="number" step="0.01" min="0" id="f_cost" value="${p.costPrice}"></div>
       <div class="field"><label>Selling Price (${esc(STATE.settings.currencySymbol)}) *</label><input type="number" step="0.01" min="0" id="f_price" value="${p.sellingPrice}"></div>
@@ -1601,6 +1611,47 @@ function productFormHtml(p){
     <div class="field" style="margin-top:8px"><label>Notes</label><textarea id="f_notes" rows="2">${esc(p.notes)}</textarea></div>
   `;
 }
+function printBarcodeLabels(products){
+  const withCode = products.filter(p=>p.barcode);
+  if(!withCode.length){ toast("None of these products have a barcode yet — open and save each one once to auto-generate it","error"); return; }
+  const w = window.open('', '_blank');
+  if(!w){ toast('Please allow pop-ups to print labels','error'); return; }
+  const labels = withCode.map(p=>`
+    <div class="label">
+      <div class="pname">${esc(p.name)}</div>
+      <div class="pprice">${money(p.sellingPrice)}</div>
+      <svg class="bc" data-code="${esc(p.barcode)}"></svg>
+    </div>`).join('');
+  w.document.write(`<!DOCTYPE html><html><head><title>Barcode Labels</title>
+    <style>
+      body{font-family:Arial,sans-serif;margin:0;padding:10px;}
+      .sheet{display:flex;flex-wrap:wrap;gap:8px;}
+      .label{width:200px;border:1px dashed #999;padding:8px;text-align:center;page-break-inside:avoid;}
+      .pname{font-size:12px;font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+      .pprice{font-size:11px;margin-bottom:4px;}
+      @media print{ .label{border:none;} }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/JsBarcode/3.11.6/JsBarcode.all.min.js"><\/script>
+    </head><body><div class="sheet">${labels}</div>
+    <script>
+      window.onload = function(){
+        document.querySelectorAll('.bc').forEach(function(svg){
+          var code = svg.getAttribute('data-code');
+          try{ JsBarcode(svg, code, {format:'CODE128', width:1.6, height:38, displayValue:true, fontSize:11, margin:2}); }catch(e){}
+        });
+        setTimeout(function(){ window.print(); }, 300);
+      };
+    <\/script>
+    </body></html>`);
+  w.document.close();
+  if(withCode.length < products.length) toast(`Printed ${withCode.length} label(s) — ${products.length-withCode.length} product(s) had no barcode yet`);
+}
+function renderBarcodePreview(value){
+  const svg = byId('barcodeSvg');
+  if(!svg || typeof JsBarcode==='undefined' || !value) return;
+  try{ JsBarcode(svg, value, {format:'CODE128', width:2, height:45, displayValue:true, fontSize:13, margin:6}); }
+  catch(e){ console.error('Barcode render failed', e); }
+}
 function openAddProduct(){
   openModal('Add Product', productFormHtml(null),
     `<button class="btn" data-action="closeModal">Cancel</button><button class="btn btn-primary" id="saveProductBtn">Save Product</button>`);
@@ -1614,6 +1665,7 @@ function openEditProduct(id){
     `<button class="btn" data-action="closeModal">Cancel</button><button class="btn btn-primary" id="saveProductBtn">Save Changes</button>`);
   wireAltUnitsEvents();
   wireUnitSelects(document.querySelector('.modal-body'));
+  setTimeout(()=>renderBarcodePreview(p.barcode), 30);
   byId('saveProductBtn').addEventListener('click', ()=>saveProduct(p));
 }
 async function saveProduct(existing){
@@ -1627,13 +1679,23 @@ async function saveProduct(existing){
   const stockQty = existing? existing.stockQty : (parseFloat(byId('f_stock').value)||0);
   const reorderLevel = parseFloat(byId('f_reorder').value)||0;
   const notes = byId('f_notes').value.trim();
+  const barcodeInput = (byId('f_barcode')?.value||'').trim();
   if(!name){ toast('Product name is required','error'); return; }
+  if(barcodeInput){
+    const dupe = STATE.products.find(x=> x.barcode===barcodeInput && (!existing || x.id!=existing.id));
+    if(dupe){ toast(`That barcode is already used by "${dupe.name}"`,'error'); return; }
+  }
   const altUnits = collectAltUnits(unit);
   const now = new Date().toISOString();
   const rec = existing? {...existing} : {createdAt:now, branch: STATE.currentBranch};
   const priceChanged = existing && Number(existing.sellingPrice) !== sellingPrice;
-  Object.assign(rec, {name,category,unit,sku,dimensions,costPrice,sellingPrice,stockQty,reorderLevel,notes,altUnits,updatedAt:now});
+  Object.assign(rec, {name,category,unit,sku,dimensions,costPrice,sellingPrice,stockQty,reorderLevel,notes,altUnits,barcode:barcodeInput||rec.barcode||'',updatedAt:now});
   const savedId = await putRec('products', rec);
+  if(!rec.barcode){
+    // Auto-generate now that we know the product's id (needed for brand-new products).
+    rec.barcode = `EV${String(savedId).padStart(8,'0')}`;
+    await putRec('products', rec);
+  }
   if(priceChanged){
     await putRec('priceHistory', {
       productId: existing.id, productName:name, oldPrice:existing.sellingPrice, newPrice:sellingPrice,
@@ -2987,6 +3049,25 @@ function wireProductSearch(container, onSelect){
       : `<div class="prod-search-empty">No matching products</div>`) + extraNote;
     list.classList.add('show');
   };
+  // A barcode scanner just types characters fast and sends Enter — so if what's currently in
+  // the box exactly matches a product's barcode, select it immediately without needing the
+  // dropdown at all. This is what makes scanning (or manually keying in a barcode) fast.
+  container.addEventListener('keydown', (e)=>{
+    if(e.key !== 'Enter') return;
+    const input = e.target.closest('.prod-search-input');
+    if(!input) return;
+    const raw = input.value.trim();
+    if(!raw) return;
+    const match = activeProducts().find(p=> p.barcode && p.barcode.toLowerCase()===raw.toLowerCase());
+    if(!match) return;
+    e.preventDefault();
+    input.value = productLabel(match);
+    input.dataset.selected = match.id;
+    const list = container.querySelector(`.prod-search-list[data-role="${input.dataset.role}"][data-row="${input.dataset.row}"]`);
+    if(list){ list.classList.remove('show'); list.innerHTML=''; }
+    onSelect(input.dataset.row, match.id);
+    container.dispatchEvent(new CustomEvent('barcode-product-selected', {detail:{rowId:input.dataset.row, productId:match.id}, bubbles:true}));
+  });
   container.addEventListener('input', (e)=>{
     const input = e.target.closest('.prod-search-input');
     if(!input) return;
@@ -3278,6 +3359,19 @@ function wireSaleBuilderEvents(){
     STATE.saleDraft.items.push({id:uid(), productId:'', qty:1, unitPrice:0, unit:''});
     byId('lineItemsBody').innerHTML = renderLineItemsRows();
     renderTotalsBox();
+  });
+  // Continuous-scan workflow: after a barcode match fills the LAST row, immediately add
+  // a fresh empty row and focus its search box so the next scan can go straight in.
+  byId('lineItemsBody').addEventListener('barcode-product-selected', (e)=>{
+    const items = STATE.saleDraft.items;
+    const isLastRow = items.length && items[items.length-1].id == e.detail.rowId;
+    if(!isLastRow) return;
+    items.push({id:uid(), productId:'', qty:1, unitPrice:0, unit:''});
+    byId('lineItemsBody').innerHTML = renderLineItemsRows();
+    renderTotalsBox();
+    const newRowId = items[items.length-1].id;
+    const newInput = document.querySelector(`.prod-search-input[data-row="${newRowId}"]`);
+    if(newInput) newInput.focus();
   });
   ['s_discType','s_discVal','s_tax','s_paid','s_delivery','s_cash','s_momo'].forEach(id=> byId(id).addEventListener('input', renderTotalsBox));
   byId('s_pmethod').addEventListener('change', (e)=>{
@@ -4960,6 +5054,20 @@ function wireTabEvents(){
   v.querySelectorAll('[data-action="delete-product"]').forEach(b=>b.addEventListener('click', ()=>deleteProduct(b.dataset.id)));
   v.querySelectorAll('[data-action="restore-product"]').forEach(b=>b.addEventListener('click', ()=>restoreProduct(b.dataset.id)));
   v.querySelectorAll('[data-action="purge-product"]').forEach(b=>b.addEventListener('click', ()=>purgeProduct(b.dataset.id)));
+  v.querySelectorAll('[data-action="print-barcode"]').forEach(b=>b.addEventListener('click', ()=>{
+    const p = STATE.products.find(x=>x.id==b.dataset.id);
+    if(p) printBarcodeLabels([p]);
+  }));
+  const printAllBarcodesBtn = byId('printAllBarcodesBtn');
+  if(printAllBarcodesBtn) printAllBarcodesBtn.addEventListener('click', ()=>{
+    const visible = activeProducts().filter(p=>{
+      if(!inBranch(p)) return false;
+      const matchQ = !invFilter.q || (p.name+p.sku+p.category).toLowerCase().includes(invFilter.q.toLowerCase());
+      const matchC = !invFilter.category || p.category===invFilter.category;
+      return matchQ && matchC;
+    });
+    printBarcodeLabels(visible);
+  });
   const toggleTrashBtn = byId('toggleTrashBtn'); if(toggleTrashBtn) toggleTrashBtn.addEventListener('click', ()=>{ invShowTrash = !invShowTrash; renderInventoryPartial(); });
 
   // Activity Log
