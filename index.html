@@ -17,9 +17,10 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.12.3/JsBarcode.all.min.js" defer></script>
 <!-- Firebase (compat SDK — plain <script> tags, no bundler needed).
-     This app now stores its data in Firebase Firestore instead of the browser's local
-     IndexedDB, so every device that opens it sees the same live data. An internet
-     connection is required; there is no offline mode anymore. -->
+     This app stores its data in Firebase Firestore, so every device that opens it sees the
+     same live data. Offline persistence is enabled (see enablePersistence below): the app
+     keeps working during a connection drop, queues any changes made offline, and syncs
+     them automatically once the connection returns. -->
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 <style>
@@ -129,7 +130,11 @@ nav.mainnav{flex:1;padding:14px 10px;overflow-y:auto;-webkit-overflow-scrolling:
 #topbar .right{display:flex;align-items:center;gap:14px;}
 .status-pill{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-soft);padding:5px 10px;border:1px solid var(--border);border-radius:999px;}
 .status-dot{width:8px;height:8px;border-radius:50%;background:var(--success);}
-.status-pill.offline .status-dot{background:var(--ink-faint);}
+.status-pill.offline{background:var(--danger-bg);border-color:#EFC9C9;color:var(--danger);font-weight:600;}
+.status-pill.offline .status-dot{background:var(--danger);animation:pulseDot 1.2s ease-in-out infinite;}
+@keyframes pulseDot{0%,100%{opacity:1;}50%{opacity:.35;}}
+#offlineBanner{display:none;background:var(--danger);color:#fff;text-align:center;font-size:13px;font-weight:600;padding:8px 16px;position:sticky;top:0;z-index:40;}
+#offlineBanner.show{display:block;}
 #menuToggle{display:none;background:none;border:0;padding:6px;}
 #menuToggle svg{width:22px;height:22px;color:var(--ink);}
 
@@ -371,6 +376,7 @@ tbody tr:hover{background:var(--surface-2);}
   <div class="overlay-scrim" id="scrim"></div>
 
   <div id="main">
+    <div id="offlineBanner">⚠️ No internet connection — you can keep working; sales, stock changes, and other actions are saved on this device and will sync automatically once you're back online.</div>
     <div id="topbar">
       <div style="display:flex;align-items:center;gap:10px;">
         <button id="menuToggle" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
@@ -497,7 +503,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
-  apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+ apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -508,6 +514,16 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const fsdb = firebase.firestore();
+// Offline support: cache data locally and queue writes made while offline, syncing them
+// automatically once the connection returns. Must be called before any other Firestore call.
+let offlinePersistenceReady = false;
+fsdb.enablePersistence({synchronizeTabs:true}).then(()=>{
+  offlinePersistenceReady = true;
+}).catch((err)=>{
+  // Fails in some private/incognito browsing modes, or very old browsers — the app still
+  // works, it just won't be able to queue writes made while fully offline in those cases.
+  console.warn('Offline persistence unavailable:', err.code || err);
+});
 
 /* All the "stores" this app keeps in Firestore. Autoincrement stores get a
    numeric `id` field (kept compatible with the rest of the app, which sorts/
@@ -605,13 +621,10 @@ function openDB(){
 }
 function docRefFor(store, key){ return fsdb.collection(store).doc(String(key)); }
 async function nextAutoId(store){
-  const counterRef = fsdb.collection('counters').doc(store);
-  return fsdb.runTransaction(async (tx)=>{
-    const snap = await tx.get(counterRef);
-    const next = (snap.exists ? (snap.data().value||0) : 0) + 1;
-    tx.set(counterRef, {value: next});
-    return next;
-  });
+  // Timestamp-based ID: works fully offline (no server round-trip needed, unlike the old
+  // transaction-based counter), and still sorts chronologically like a sequential counter did.
+  // The random suffix guards against two devices creating a record in the same millisecond.
+  return Date.now() * 1000 + Math.floor(Math.random()*1000);
 }
 function getAll(store){
   return trackBusy(fsdb.collection(store).get().then(snap=> snap.docs.map(d=>d.data())));
@@ -1042,16 +1055,27 @@ async function refreshAll(){
   STATE.activityLog = (await getAll('activityLog')).sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id).slice(0,500);
 }
 
+let lastKnownOnline = null; // null = not yet determined
 function updateOnlineStatus(){
   const pill = byId('statusPill');
   if(!pill) return;
   const online = navigator.onLine && dbReachable;
   pill.classList.toggle('offline', !online);
+  const banner = byId('offlineBanner');
+  if(banner) banner.classList.toggle('show', !online);
   byId('statusText').textContent = !navigator.onLine
     ? 'Offline — no internet connection'
     : !dbReachable
       ? 'Server unreachable — retrying…'
       : 'Online';
+  if(lastKnownOnline !== null && lastKnownOnline !== online){
+    if(!online){
+      toast(!navigator.onLine ? "You're offline — you can keep working, changes will sync once you're back online" : "Can't reach the server — retrying…", 'error');
+    }else{
+      toast("Back online — you're all set");
+    }
+  }
+  lastKnownOnline = online;
 }
 
 /* ---------------- sidebar / nav ---------------- */
