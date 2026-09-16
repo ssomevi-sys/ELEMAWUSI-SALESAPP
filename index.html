@@ -503,7 +503,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
- apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+  apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -514,6 +514,7 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const fsdb = firebase.firestore();
+
 // Offline support: cache data locally and queue writes made while offline, syncing them
 // automatically once the connection returns. Must be called before any other Firestore call.
 let offlinePersistenceReady = false;
@@ -626,6 +627,26 @@ async function nextAutoId(store){
   // The random suffix guards against two devices creating a record in the same millisecond.
   return Date.now() * 1000 + Math.floor(Math.random()*1000);
 }
+// A Firestore write's returned Promise only resolves once the SERVER acknowledges it — even
+// though, with offline persistence on, the write is already applied to the local cache and
+// queued for sync the instant it's called. Without this, `await putRec(...)` would hang
+// indefinitely while offline (which is exactly what "saving doesn't work offline" looked like),
+// even though the save had actually already succeeded locally and would sync once reconnected.
+function waitForLocalWrite(promise){
+  return new Promise((resolve, reject)=>{
+    let settled = false;
+    const timer = setTimeout(()=>{
+      if(!settled){ settled = true; resolve('queued-locally'); }
+    }, 1200);
+    promise.then(
+      (v)=>{ if(!settled){ settled=true; clearTimeout(timer); resolve(v); } },
+      (err)=>{
+        if(!settled){ settled=true; clearTimeout(timer); reject(err); }
+        else console.error('A previously-queued offline write failed once it reached the server:', err);
+      }
+    );
+  });
+}
 function getAll(store){
   return trackBusy(fsdb.collection(store).get().then(snap=> snap.docs.map(d=>d.data())));
 }
@@ -636,19 +657,20 @@ function putRec(store,val){
   return trackBusy((async ()=>{
     if(KEYED_STORES[store]){
       const key = val[KEYED_STORES[store]];
-      await docRefFor(store,key).set(val);
+      await waitForLocalWrite(docRefFor(store,key).set(val));
       return key;
     }
-    // autoincrement-style store
+    // autoincrement-style store — nextAutoId is purely local/timestamp-based, so it never
+    // depends on connectivity either (see its own comment above).
     if(val.id===undefined || val.id===null){
       val.id = await nextAutoId(store);
     }
-    await docRefFor(store,val.id).set(val);
+    await waitForLocalWrite(docRefFor(store,val.id).set(val));
     return val.id;
   })());
 }
 function delRec(store,key){
-  return trackBusy(docRefFor(store,key).delete());
+  return trackBusy(waitForLocalWrite(docRefFor(store,key).delete()));
 }
 function clearStore(store){
   return trackBusy((async ()=>{
