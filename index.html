@@ -503,7 +503,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
-   apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+ apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -514,6 +514,7 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const fsdb = firebase.firestore();
+
 // Offline support: cache data locally and queue writes made while offline, syncing them
 // automatically once the connection returns. Must be called before any other Firestore call.
 let offlinePersistenceReady = false;
@@ -2970,7 +2971,7 @@ function renderBomBuilder(){
   const d = STATE.bomDraft;
   const kit = STATE.products.find(p=>p.id==d.kitProductId);
   return `
-    <div class="panel">
+    <div class="panel" id="bomBuilderRoot">
       <div class="panel-head"><h3>${d.editingId? 'Edit' : 'New'} Bill of Materials</h3></div>
       <div class="panel-body">
         <div class="field" style="max-width:360px">
@@ -2998,7 +2999,13 @@ function renderBomBuilder(){
 }
 function wireBomBuilderEvents(){
   const d = STATE.bomDraft;
-  wireProductSearch(byId('view'), (rowId, productId)=>{
+  // Wired to bomBuilderRoot (recreated fresh every time this screen renders), NOT the
+  // permanent #view container — otherwise every previous visit to this screen this session
+  // leaves its old listeners permanently attached to #view (since #view itself is never
+  // replaced, only its contents), all still holding stale/abandoned copies of the draft data.
+  // The oldest stale listener would "win" the race on every click, silently writing to data
+  // nobody reads anymore while the real, current listener never gets a turn.
+  wireProductSearch(byId('bomBuilderRoot'), (rowId, productId)=>{
     if(rowId==='kit'){
       d.kitProductId = productId;
       return;
