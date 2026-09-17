@@ -3135,9 +3135,17 @@ function wireProductSearch(container, onSelect){
   container.addEventListener('focusin', (e)=>{
     const input = e.target.closest('.prod-search-input');
     if(!input) return;
+    closeOtherLists(input.closest('.prod-search-wrap'));
     input.select();
     showList(input, '');
   });
+  const closeOtherLists = (keepWrap)=>{
+    container.querySelectorAll('.prod-search-list.show').forEach(l=>{
+      if(!keepWrap || l !== keepWrap.querySelector('.prod-search-list')){
+        l.classList.remove('show'); l.innerHTML='';
+      }
+    });
+  };
   const selectItem = (item)=>{
     const list = item.closest('.prod-search-list');
     const rowId = list.dataset.row, role = list.dataset.role;
@@ -3150,11 +3158,17 @@ function wireProductSearch(container, onSelect){
   // Selection happens here (on press-down) rather than waiting for 'click', because on some
   // mobile browsers preventDefault() on touchstart stops the browser from ever firing the
   // follow-up synthetic click — which used to make tapping a product silently do nothing.
+  // Closing every OTHER open dropdown first (based on wherever this press actually landed)
+  // matters because a list can be taller than a table row, so a leftover open list from a
+  // previous row can visually sit on top of the row below it and intercept a press meant for
+  // that row — silently applying the pick to the wrong row and leaving the intended one blank.
   container.addEventListener('mousedown', (e)=>{
+    closeOtherLists(e.target.closest('.prod-search-wrap'));
     const item = e.target.closest('.prod-search-item');
     if(item){ e.preventDefault(); selectItem(item); }
   });
   container.addEventListener('touchstart', (e)=>{
+    closeOtherLists(e.target.closest('.prod-search-wrap'));
     const item = e.target.closest('.prod-search-item');
     if(item){ e.preventDefault(); selectItem(item); }
   }, {passive:false});
