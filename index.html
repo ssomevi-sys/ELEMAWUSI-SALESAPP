@@ -503,7 +503,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
-  apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+   apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -514,7 +514,6 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const fsdb = firebase.firestore();
-
 // Offline support: cache data locally and queue writes made while offline, syncing them
 // automatically once the connection returns. Must be called before any other Firestore call.
 let offlinePersistenceReady = false;
@@ -3148,29 +3147,30 @@ function wireProductSearch(container, onSelect){
   };
   const selectItem = (item)=>{
     const list = item.closest('.prod-search-list');
+    if(!list) return; // list may have already been cleared/replaced — fail silently, not crash
     const rowId = list.dataset.row, role = list.dataset.role;
     const input = container.querySelector(`.prod-search-input[data-role="${role}"][data-row="${rowId}"]`);
+    if(!input) return; // same defensive guard for the matching input
     const p = STATE.products.find(x=>x.id==item.dataset.id);
-    if(input && p){ input.value = productLabel(p); input.dataset.selected = p.id; }
+    input.value = productLabel(p); input.dataset.selected = p? p.id : '';
     list.classList.remove('show'); list.innerHTML='';
     onSelect(rowId, item.dataset.id);
   };
   // Selection happens here (on press-down) rather than waiting for 'click', because on some
   // mobile browsers preventDefault() on touchstart stops the browser from ever firing the
   // follow-up synthetic click — which used to make tapping a product silently do nothing.
-  // Closing every OTHER open dropdown first (based on wherever this press actually landed)
-  // matters because a list can be taller than a table row, so a leftover open list from a
-  // previous row can visually sit on top of the row below it and intercept a press meant for
-  // that row — silently applying the pick to the wrong row and leaving the intended one blank.
+  // closeOtherLists is only invoked when the press ISN'T on an item (i.e. the user pressed
+  // directly into a different field) — calling it before handling an actual item-press risked
+  // interfering with that very row's own list/input, which is what caused a crash.
   container.addEventListener('mousedown', (e)=>{
-    closeOtherLists(e.target.closest('.prod-search-wrap'));
     const item = e.target.closest('.prod-search-item');
-    if(item){ e.preventDefault(); selectItem(item); }
+    if(item){ e.preventDefault(); selectItem(item); return; }
+    closeOtherLists(e.target.closest('.prod-search-wrap'));
   });
   container.addEventListener('touchstart', (e)=>{
-    closeOtherLists(e.target.closest('.prod-search-wrap'));
     const item = e.target.closest('.prod-search-item');
-    if(item){ e.preventDefault(); selectItem(item); }
+    if(item){ e.preventDefault(); selectItem(item); return; }
+    closeOtherLists(e.target.closest('.prod-search-wrap'));
   }, {passive:false});
   container.addEventListener('click', (e)=>{
     if(e.target.closest('.prod-search-item')) return; // already handled on press-down above
