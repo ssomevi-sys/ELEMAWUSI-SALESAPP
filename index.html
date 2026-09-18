@@ -503,7 +503,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
-  apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+   apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -3638,9 +3638,11 @@ function openSaleCompleteModal(sale){
   openModal('Sale Completed', body,
     `<button class="btn" data-action="closeModal">Done</button>
      <button class="btn" id="printInvFromCompleteBtn">🖨 Print Invoice</button>
-     <button class="btn btn-primary" id="printReceiptBtn">🧾 Print Receipt</button>`);
+     <button class="btn" id="printReceiptBtn">🧾 Print Receipt</button>
+     ${btPrinter.char? `<button class="btn btn-primary" id="btPrintBtn">📶 Print to Bluetooth Printer</button>` : ''}`);
   byId('printReceiptBtn').addEventListener('click', ()=> printReceipt(sale));
   byId('printInvFromCompleteBtn').addEventListener('click', ()=> printInvoice(sale));
+  const btBtn = byId('btPrintBtn'); if(btBtn) btBtn.addEventListener('click', ()=> printReceiptToBluetooth(sale));
 }
 async function syncDeliveryForSale(sale){
   const existing = STATE.deliveries.find(d=>d.saleId==sale.id);
@@ -3759,9 +3761,11 @@ function viewSale(id){
   openModal(`Invoice ${s.invoiceNo}`, body,
     `<button class="btn" data-action="closeModal">Close</button>
      <button class="btn" id="printReceiptModalBtn">🧾 Print Receipt</button>
-     <button class="btn btn-primary" id="printInvBtn">🖨 Print Invoice</button>`, true);
+     <button class="btn btn-primary" id="printInvBtn">🖨 Print Invoice</button>
+     ${btPrinter.char? `<button class="btn" id="btPrintModalBtn">📶 Print to Bluetooth Printer</button>` : ''}`, true);
   byId('printInvBtn').addEventListener('click', ()=> printInvoice(s));
   byId('printReceiptModalBtn').addEventListener('click', ()=> printReceipt(s));
+  const btModalBtn = byId('btPrintModalBtn'); if(btModalBtn) btModalBtn.addEventListener('click', ()=> printReceiptToBluetooth(s));
 }
 function invoiceHtml(s){
   const st = STATE.settings;
@@ -4960,6 +4964,192 @@ function exportInternalUseCsv(){
 /* ============================================================
    SETTINGS
    ============================================================ */
+/* ============================================================
+   BLUETOOTH HARDWARE — thermal receipt printer + barcode scanner
+   ============================================================
+   Browsers can only talk to Bluetooth via the Web Bluetooth API, which:
+   - only works in Chrome/Edge/Opera (never Safari, never any iPhone/iPad)
+   - only works with Bluetooth LOW ENERGY (BLE) devices, not classic/SPP Bluetooth
+   There's no single universal BLE service for thermal printers across brands, so we try a
+   broad list of the service/characteristic UUIDs used by most common ESC/POS printers, and
+   fall back to scanning every service on the device for a writable characteristic. */
+const BT_PRINTER_CANDIDATE_SERVICES = [
+  '000018f0-0000-1000-8000-00805f9b34fb', // very common generic "printer service" on cheap BLE thermal printers
+  '0000ff00-0000-1000-8000-00805f9b34fb',
+  '0000ffe0-0000-1000-8000-00805f9b34fb', // common "BLE serial" service used by many clone printers
+  '49535343-fe7d-4ae5-8fa9-9fafd205e455', // ISSC/Microchip transparent UART, used by several printer modules
+  '0000ae30-0000-1000-8000-00805f9b34fb'
+];
+let btPrinter = { device:null, server:null, char:null };
+async function connectBluetoothPrinter(){
+  if(!navigator.bluetooth){ toast('This browser doesn\'t support Bluetooth — use Chrome or Edge on Android or Windows','error'); return; }
+  try{
+    const device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices:true,
+      optionalServices: BT_PRINTER_CANDIDATE_SERVICES
+    });
+    toast(`Connecting to ${device.name||'printer'}…`);
+    const server = await device.gatt.connect();
+    let writableChar = null;
+    const services = await server.getPrimaryServices();
+    for(const svc of services){
+      const chars = await svc.getCharacteristics();
+      const found = chars.find(c=> c.properties.write || c.properties.writeWithoutResponse);
+      if(found){ writableChar = found; break; }
+    }
+    if(!writableChar){
+      toast('Connected, but couldn\'t find a printable channel on this device — it may not be a supported printer','error');
+      return;
+    }
+    btPrinter = { device, server, char: writableChar };
+    device.addEventListener('gattserverdisconnected', ()=>{
+      btPrinter = { device:null, server:null, char:null };
+      toast('Printer disconnected','error');
+      if(STATE.tab==='settings') renderSettingsPartial();
+    });
+    STATE.settings.lastPrinterName = device.name || 'Bluetooth Printer';
+    await putRec('settings', STATE.settings);
+    toast(`Connected to ${device.name||'printer'}`);
+    if(STATE.tab==='settings') renderSettingsPartial();
+  }catch(err){
+    if(err.name==='NotFoundError') return; // user cancelled the device picker — not an error
+    console.error('Bluetooth printer connect failed:', err);
+    toast('Could not connect to the printer — make sure it\'s on and in pairing range','error');
+  }
+}
+function disconnectBluetoothPrinter(){
+  if(btPrinter.device && btPrinter.device.gatt.connected) btPrinter.device.gatt.disconnect();
+  btPrinter = { device:null, server:null, char:null };
+  if(STATE.tab==='settings') renderSettingsPartial();
+}
+// BLE writes are usually capped around 20 bytes per packet on cheap printer modules, so we
+// send the receipt in small chunks with a short pause between each rather than all at once.
+async function sendToPrinter(bytes){
+  if(!btPrinter.char) throw new Error('No printer connected');
+  const chunkSize = 20;
+  for(let i=0; i<bytes.length; i+=chunkSize){
+    const chunk = bytes.slice(i, i+chunkSize);
+    if(btPrinter.char.properties.writeWithoutResponse) await btPrinter.char.writeValueWithoutResponse(chunk);
+    else await btPrinter.char.writeValue(chunk);
+    await new Promise(r=>setTimeout(r, 20));
+  }
+}
+// Builds a plain ESC/POS byte sequence for a receipt. Kept deliberately simple (no logos,
+// no barcodes on the paper itself) for the widest possible printer compatibility.
+function buildReceiptEscPos(sale){
+  const enc = new TextEncoder();
+  const bytes = [];
+  const push = (arr)=> bytes.push(...arr);
+  const text = (s)=> push(Array.from(enc.encode(s)));
+  const ESC = 0x1B, GS = 0x1D;
+  push([ESC,0x40]); // init
+  push([ESC,0x61,0x01]); // center
+  push([ESC,0x21,0x30]); // double-width/height
+  text(`${STATE.settings.companyName||'Receipt'}\n`);
+  push([ESC,0x21,0x00]); // normal size
+  if(STATE.settings.phone) text(`${STATE.settings.phone}\n`);
+  if(STATE.settings.address) text(`${STATE.settings.address}\n`);
+  text('--------------------------------\n');
+  push([ESC,0x61,0x00]); // left align
+  text(`Invoice: ${sale.invoiceNo}\n`);
+  text(`Date: ${fmtDateTime(sale.date)}\n`);
+  if(sale.customerName) text(`Customer: ${sale.customerName}\n`);
+  text('--------------------------------\n');
+  sale.items.forEach(it=>{
+    text(`${it.productName||it.name}\n`);
+    text(`  ${fmtNum(it.qty)} ${it.unit||''} x ${money(it.unitPrice)} = ${money(it.lineTotal!=null?it.lineTotal:it.qty*it.unitPrice)}\n`);
+  });
+  text('--------------------------------\n');
+  push([ESC,0x21,0x10]); // double-height
+  text(`TOTAL: ${money(sale.grandTotal)}\n`);
+  push([ESC,0x21,0x00]);
+  if(sale.amountPaid!=null) text(`Paid: ${money(sale.amountPaid)}\n`);
+  if(sale.balance) text(`Balance: ${money(sale.balance)}\n`);
+  text('\n');
+  push([ESC,0x61,0x01]);
+  text('Thank you!\n\n\n');
+  push([GS,0x56,0x00]); // full cut (ignored harmlessly by printers without a cutter)
+  return new Uint8Array(bytes);
+}
+async function printReceiptToBluetooth(sale){
+  if(!btPrinter.char){ toast('No printer connected — go to Settings to connect one','error'); return; }
+  try{
+    toast('Printing…');
+    await sendToPrinter(buildReceiptEscPos(sale));
+    toast('Receipt printed');
+  }catch(err){
+    console.error('Print failed:', err);
+    toast('Printing failed — check the printer is still on and in range','error');
+  }
+}
+
+/* Bluetooth barcode scanner — most scanners pair as a Bluetooth KEYBOARD at the OS level and
+   need no code at all (they just type into whatever field is focused, which Sales/Purchases/
+   BOM already handle). This is only for the less common BLE GATT "notify" style scanners that
+   send scanned codes as raw Bluetooth data instead of acting like a keyboard. */
+const BT_SCANNER_CANDIDATE_SERVICES = [
+  '0000ffe0-0000-1000-8000-00805f9b34fb',
+  '49535343-fe7d-4ae5-8fa9-9fafd205e455',
+  '0000fff0-0000-1000-8000-00805f9b34fb'
+];
+let btScanner = { device:null, char:null };
+async function connectBluetoothScanner(){
+  if(!navigator.bluetooth){ toast('This browser doesn\'t support Bluetooth — use Chrome or Edge on Android or Windows','error'); return; }
+  try{
+    const device = await navigator.bluetooth.requestDevice({ acceptAllDevices:true, optionalServices: BT_SCANNER_CANDIDATE_SERVICES });
+    const server = await device.gatt.connect();
+    let notifyChar = null;
+    const services = await server.getPrimaryServices();
+    for(const svc of services){
+      const chars = await svc.getCharacteristics();
+      const found = chars.find(c=> c.properties.notify);
+      if(found){ notifyChar = found; break; }
+    }
+    if(!notifyChar){ toast('Connected, but this device doesn\'t look like a supported scanner','error'); return; }
+    await notifyChar.startNotifications();
+    let buffer = '';
+    notifyChar.addEventListener('characteristicvaluechanged', (e)=>{
+      const chunk = new TextDecoder().decode(e.target.value);
+      buffer += chunk;
+      if(buffer.includes('\n') || buffer.includes('\r')){
+        const code = buffer.replace(/[\r\n]/g,'').trim();
+        buffer = '';
+        if(code) handleBluetoothScan(code);
+      }
+    });
+    btScanner = { device, char: notifyChar };
+    device.addEventListener('gattserverdisconnected', ()=>{
+      btScanner = { device:null, char:null };
+      toast('Scanner disconnected','error');
+      if(STATE.tab==='settings') renderSettingsPartial();
+    });
+    STATE.settings.lastScannerName = device.name || 'Bluetooth Scanner';
+    await putRec('settings', STATE.settings);
+    toast(`Connected to ${device.name||'scanner'}`);
+    if(STATE.tab==='settings') renderSettingsPartial();
+  }catch(err){
+    if(err.name==='NotFoundError') return;
+    console.error('Bluetooth scanner connect failed:', err);
+    toast('Could not connect to the scanner — make sure it\'s on and in pairing range','error');
+  }
+}
+function disconnectBluetoothScanner(){
+  if(btScanner.device && btScanner.device.gatt.connected) btScanner.device.gatt.disconnect();
+  btScanner = { device:null, char:null };
+  if(STATE.tab==='settings') renderSettingsPartial();
+}
+// Feeds a code from a BLE-notify scanner into whichever product-search box is currently
+// focused, the same way a keyboard-mode scanner's Enter-triggered match already works.
+function handleBluetoothScan(code){
+  const active = document.activeElement;
+  if(active && active.classList && active.classList.contains('prod-search-input')){
+    active.value = code;
+    active.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true}));
+  }else{
+    toast(`Scanned: ${code} — click into a product field first, then scan`, 'error');
+  }
+}
+function renderSettingsPartial(){ byId('view').innerHTML = renderSettings(); wireTabEvents(); }
 function renderSettings(){
   const s = STATE.settings;
   return `
@@ -4980,6 +5170,38 @@ function renderSettings(){
           <div class="field"><label>Invoice Number Prefix</label><input type="text" id="set_prefix" value="${esc(s.invoicePrefix)}"></div>
         </div>
         <button class="btn btn-primary" id="saveSettingsBtn">Save Settings</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h3>Printer &amp; Barcode Scanner</h3></div>
+      <div class="panel-body">
+        <div class="help-box">Works in Chrome or Edge on Android or Windows. Not supported on iPhone/iPad or Safari — Apple blocks browser Bluetooth access entirely. Not every printer model will work; only Bluetooth Low Energy (BLE) printers can connect this way, and connecting has to be done once per browser session (it can't stay connected automatically after closing the app, that's a browser security rule, not a bug).</div>
+
+        <div class="field-row" style="align-items:center">
+          <div class="field">
+            <label>Thermal Receipt Printer</label>
+            <div class="hint">${btPrinter.char? `🟢 Connected: ${esc(btPrinter.device.name||'Printer')}` : (s.lastPrinterName? `⚪ Not connected (last used: ${esc(s.lastPrinterName)})` : '⚪ Not connected')}</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-primary" id="connectPrinterBtn">${btPrinter.char?'🔄 Reconnect':'🖨️ Connect Printer'}</button>
+            ${btPrinter.char? `<button class="btn" id="testPrintBtn">Print Test Receipt</button><button class="btn" id="disconnectPrinterBtn">Disconnect</button>` : ''}
+          </div>
+        </div>
+
+        <hr style="margin:18px 0;border:none;border-top:1px solid var(--border-soft)">
+
+        <div class="field-row" style="align-items:center">
+          <div class="field">
+            <label>Bluetooth Barcode Scanner</label>
+            <div class="hint">Most scanners don't need this — pair them like a keyboard in your device's own Bluetooth settings, then just click into a product field in Sales/Purchases and scan. Only use the button below for a scanner that doesn't show up as a keyboard when paired normally.</div>
+            <div class="hint" style="margin-top:4px">${btScanner.char? `🟢 Connected: ${esc(btScanner.device.name||'Scanner')}` : (s.lastScannerName? `⚪ Not connected (last used: ${esc(s.lastScannerName)})` : '⚪ Not connected')}</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn" id="connectScannerBtn">${btScanner.char?'🔄 Reconnect':'🔍 Connect Scanner (advanced)'}</button>
+            ${btScanner.char? `<button class="btn" id="disconnectScannerBtn">Disconnect</button>` : ''}
+          </div>
+        </div>
       </div>
     </div>
 
@@ -5315,6 +5537,17 @@ function wireTabEvents(){
 
   // Settings
   const saveSet = byId('saveSettingsBtn'); if(saveSet) saveSet.addEventListener('click', saveSettings);
+  const connPrinter = byId('connectPrinterBtn'); if(connPrinter) connPrinter.addEventListener('click', connectBluetoothPrinter);
+  const discPrinter = byId('disconnectPrinterBtn'); if(discPrinter) discPrinter.addEventListener('click', disconnectBluetoothPrinter);
+  const testPrint = byId('testPrintBtn'); if(testPrint) testPrint.addEventListener('click', ()=>{
+    printReceiptToBluetooth({
+      invoiceNo: 'TEST-0001', date: new Date().toISOString(), customerName: 'Test Customer',
+      items: [{productName:'Sample Item', qty:2, unit:'piece', unitPrice:10, lineTotal:20}],
+      grandTotal: 20, amountPaid: 20, balance: 0
+    });
+  });
+  const connScanner = byId('connectScannerBtn'); if(connScanner) connScanner.addEventListener('click', connectBluetoothScanner);
+  const discScanner = byId('disconnectScannerBtn'); if(discScanner) discScanner.addEventListener('click', disconnectBluetoothScanner);
   const exportXlsx = byId('exportExcelBtn'); if(exportXlsx) exportXlsx.addEventListener('click', exportExcelBackup);
   const exportB = byId('exportBackupBtn'); if(exportB) exportB.addEventListener('click', exportBackup);
   const importB = byId('importBackupBtn'); if(importB) importB.addEventListener('click', ()=>byId('importFile').click());
