@@ -1449,18 +1449,21 @@ function renderInventory(){
         ${rows.length? rows.map(p=>{
           const low = Number(p.stockQty) <= Number(p.reorderLevel||0);
           const pct = Math.min(100, p.reorderLevel? (p.stockQty/(p.reorderLevel*2))*100 : 100);
+          const bom = invShowTrash ? null : activeBomFor(p.id);
           return `<tr>
-            <td><b>${esc(p.name)}</b>${p.dimensions?`<div class="hint">${esc(p.dimensions)}</div>`:''}</td>
+            <td><b>${esc(p.name)}</b>${bom?` <span class="badge badge-info" title="Sold by deducting its components' stock">🧩 Kit</span>`:''}${p.dimensions?`<div class="hint">${esc(p.dimensions)}</div>`:''}
+              ${bom? `<div class="hint" style="margin-top:3px">Made of: ${bom.components.map(c=>{ const cp = STATE.products.find(x=>x.id==c.productId); return cp? `${fmtNum(c.qty)} ${esc(c.unit||cp.unit)} ${esc(cp.name)}` : '(missing product)'; }).join(', ')}</div>` : ''}
+            </td>
             <td>${esc(p.category)}</td>
             <td class="mono">${esc(p.sku||'—')}</td>
             <td>${esc(p.unit)}</td>
             <td class="right mono">${money(p.costPrice)}</td>
             <td class="right mono">${money(p.sellingPrice)}</td>
-            <td class="right mono">${fmtNum(p.stockQty)} ${esc(p.unit)}
+            <td class="right mono">${bom? `<span class="hint">made to order</span>` : `${fmtNum(p.stockQty)} ${esc(p.unit)}
               ${stockBreakdownHtml(p)}
-              ${invShowTrash?'':`<span class="stock-bar ${low?'low':''}"><span style="width:${Math.max(6,pct)}%"></span></span>`}
+              ${invShowTrash?'':`<span class="stock-bar ${low?'low':''}"><span style="width:${Math.max(6,pct)}%"></span></span>`}`}
             </td>
-            <td>${invShowTrash? '<span class="badge badge-bad">Deleted</span>' : (low? '<span class="badge badge-bad">Low Stock</span>' : '<span class="badge badge-ok">In Stock</span>')}</td>
+            <td>${invShowTrash? '<span class="badge badge-bad">Deleted</span>' : bom? '<span class="badge badge-ok">Kit — always available</span>' : (low? '<span class="badge badge-bad">Low Stock</span>' : '<span class="badge badge-ok">In Stock</span>')}</td>
             <td class="right">
               ${invShowTrash? `
                 <button class="icon-btn" title="Restore" data-action="restore-product" data-id="${p.id}">↩️</button>
@@ -3361,8 +3364,14 @@ function renderLineItemsRows(){
     const unitSelect = p? `<select data-role="unit" data-row="${it.id}">${units.map(u=>`<option value="${esc(u.name)}" ${it.unit===u.name?'selected':''}>${esc(u.name)}</option>`).join('')}</select>` : `<select data-role="unit" data-row="${it.id}" disabled><option>—</option></select>`;
     const baseQty = p? toBaseQty(p, it.unit, it.qty) : Number(it.qty);
     const stockHint = p? `<div class="hint">= ${fmtNum(baseQty)} ${esc(p.unit)} of stock</div>` : '';
+    const bom = p? activeBomFor(p.id) : null;
+    const kitHint = bom? `<div class="hint" style="margin-top:4px;line-height:1.6">🧩 Kit — made of: ${bom.components.map(c=>{
+        const cp = STATE.products.find(x=>x.id==c.productId);
+        if(!cp) return '(missing product)';
+        return `${fmtNum(c.qty)} ${esc(c.unit||cp.unit)} ${esc(cp.name)} <button type="button" class="btn btn-sm" style="padding:1px 6px;font-size:11px" data-action="addComponentLine" data-row="${it.id}" data-component-id="${cp.id}" title="Add ${esc(cp.name)} as its own separate line">+ Sell separately</button>`;
+      }).join(', ')}</div>` : '';
     return `<tr data-row="${it.id}">
-      <td style="min-width:220px">${productSearchHtml('prod', it.id, it.productId)}</td>
+      <td style="min-width:220px">${productSearchHtml('prod', it.id, it.productId)}${kitHint}</td>
       <td style="min-width:110px">${unitSelect}${stockHint}</td>
       <td><input type="number" min="0" step="0.01" data-role="qty" data-row="${it.id}" value="${it.qty}" style="width:90px"></td>
       <td><input type="number" min="0" step="0.01" data-role="price" data-row="${it.id}" value="${it.unitPrice}" style="width:110px"></td>
@@ -3519,6 +3528,16 @@ function wireSaleBuilderEvents(){
       if(STATE.saleDraft.items.length===0) STATE.saleDraft.items.push({id:uid(), productId:'', qty:1, unitPrice:0});
       byId('lineItemsBody').innerHTML = renderLineItemsRows();
       renderTotalsBox();
+      return;
+    }
+    const addComp = e.target.closest('[data-action="addComponentLine"]');
+    if(addComp){
+      const cp = STATE.products.find(x=>x.id==addComp.dataset.componentId);
+      if(!cp) return;
+      STATE.saleDraft.items.push({id:uid(), productId:cp.id, qty:1, unitPrice:cp.sellingPrice, unit:cp.unit});
+      byId('lineItemsBody').innerHTML = renderLineItemsRows();
+      renderTotalsBox();
+      toast(`${cp.name} added as its own line`);
     }
   });
   byId('saveSaleBtn').addEventListener('click', saveSale);
