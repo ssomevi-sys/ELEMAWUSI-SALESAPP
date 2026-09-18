@@ -503,7 +503,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
-   apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+  apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -5176,7 +5176,13 @@ function renderSettings(){
     <div class="panel">
       <div class="panel-head"><h3>Printer &amp; Barcode Scanner</h3></div>
       <div class="panel-body">
-        <div class="help-box">Works in Chrome or Edge on Android or Windows. Not supported on iPhone/iPad or Safari — Apple blocks browser Bluetooth access entirely. Not every printer model will work; only Bluetooth Low Energy (BLE) printers can connect this way, and connecting has to be done once per browser session (it can't stay connected automatically after closing the app, that's a browser security rule, not a bug).</div>
+        <div class="help-box">Works in Chrome or Edge on Android or Windows. Not supported on iPhone/iPad or Safari — Apple blocks browser Bluetooth access entirely.</div>
+        <div class="help-box" style="background:var(--warning-bg);border-color:#F0D9A0">
+          <b>Important — two different kinds of "Bluetooth" printer exist, and the button below only works with one of them:</b><br>
+          Most budget thermal receipt printers (including Xprinter, the brand many people use here) use an older type called <b>Classic Bluetooth</b>. Browsers are fundamentally unable to talk to Classic Bluetooth devices — this isn't something any amount of app code can work around.<br><br>
+          <b>If "Connect Printer" below doesn't actually print anything</b> (or only feeds/cuts paper with no text), your printer is almost certainly Classic Bluetooth. The fix: pair it the normal way in your device's own Bluetooth settings (Settings → Bluetooth → Add device), install the printer manufacturer's official driver/app if one is provided, and then use the ordinary <b>"Print Receipt"</b> / <b>"Print Invoice"</b> buttons in Sales — those go through your device's normal printing system and will work correctly once the printer is set up that way, already sized correctly for 80mm receipt paper.<br><br>
+          The button below is only useful for newer printers that specifically advertise "BLE" (Bluetooth Low Energy) support.
+        </div>
 
         <div class="field-row" style="align-items:center">
           <div class="field">
