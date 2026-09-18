@@ -503,7 +503,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
- apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+  apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -3483,14 +3483,7 @@ function wireSaleBuilderEvents(){
     row.productId = productId;
     const p = STATE.products.find(x=>x.id==productId);
     if(p){ row.unit = p.unit; row.unitPrice = p.sellingPrice; }
-    const tr = document.querySelector(`tr[data-row="${rowId}"]`);
-    if(tr){
-      const unitCell = tr.children[1];
-      unitCell.innerHTML = p? `<select data-role="unit" data-row="${rowId}">${sellUnitsFor(p).map(u=>`<option value="${esc(u.name)}" ${row.unit===u.name?'selected':''}>${esc(u.name)}</option>`).join('')}</select>` : `<select data-role="unit" data-row="${rowId}" disabled><option>—</option></select>`;
-      const priceInput = tr.querySelector('[data-role="price"]');
-      if(priceInput && p) priceInput.value = p.sellingPrice;
-      updateLineDisplay(rowId);
-    }
+    byId('lineItemsBody').innerHTML = renderLineItemsRows();
     renderTotalsBox();
   });
   byId('lineItemsBody').addEventListener('change', (e)=>{
