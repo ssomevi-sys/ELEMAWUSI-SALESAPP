@@ -503,7 +503,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
-   apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+ apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -3639,10 +3639,11 @@ function openSaleCompleteModal(sale){
     `<button class="btn" data-action="closeModal">Done</button>
      <button class="btn" id="printInvFromCompleteBtn">🖨 Print Invoice</button>
      <button class="btn" id="printReceiptBtn">🧾 Print Receipt</button>
-     ${btPrinter.char? `<button class="btn btn-primary" id="btPrintBtn">📶 Print to Bluetooth Printer</button>` : ''}`);
+     ${btPrinter.char? `<button class="btn btn-primary" id="btPrintReceiptBtn">📶 Bluetooth: Receipt</button><button class="btn btn-primary" id="btPrintInvBtn">📶 Bluetooth: Invoice</button>` : ''}`);
   byId('printReceiptBtn').addEventListener('click', ()=> printReceipt(sale));
   byId('printInvFromCompleteBtn').addEventListener('click', ()=> printInvoice(sale));
-  const btBtn = byId('btPrintBtn'); if(btBtn) btBtn.addEventListener('click', ()=> printReceiptToBluetooth(sale));
+  const btRcpt = byId('btPrintReceiptBtn'); if(btRcpt) btRcpt.addEventListener('click', ()=> printToBluetooth(sale, 'receipt'));
+  const btInv = byId('btPrintInvBtn'); if(btInv) btInv.addEventListener('click', ()=> printToBluetooth(sale, 'invoice'));
 }
 async function syncDeliveryForSale(sale){
   const existing = STATE.deliveries.find(d=>d.saleId==sale.id);
@@ -3762,10 +3763,11 @@ function viewSale(id){
     `<button class="btn" data-action="closeModal">Close</button>
      <button class="btn" id="printReceiptModalBtn">🧾 Print Receipt</button>
      <button class="btn btn-primary" id="printInvBtn">🖨 Print Invoice</button>
-     ${btPrinter.char? `<button class="btn" id="btPrintModalBtn">📶 Print to Bluetooth Printer</button>` : ''}`, true);
+     ${btPrinter.char? `<button class="btn" id="btPrintReceiptModalBtn">📶 Bluetooth: Receipt</button><button class="btn" id="btPrintInvModalBtn">📶 Bluetooth: Invoice</button>` : ''}`, true);
   byId('printInvBtn').addEventListener('click', ()=> printInvoice(s));
   byId('printReceiptModalBtn').addEventListener('click', ()=> printReceipt(s));
-  const btModalBtn = byId('btPrintModalBtn'); if(btModalBtn) btModalBtn.addEventListener('click', ()=> printReceiptToBluetooth(s));
+  const btRcptModal = byId('btPrintReceiptModalBtn'); if(btRcptModal) btRcptModal.addEventListener('click', ()=> printToBluetooth(s, 'receipt'));
+  const btInvModal = byId('btPrintInvModalBtn'); if(btInvModal) btInvModal.addEventListener('click', ()=> printToBluetooth(s, 'invoice'));
 }
 function invoiceHtml(s){
   const st = STATE.settings;
@@ -5049,37 +5051,99 @@ function buildReceiptEscPos(sale){
   if(STATE.settings.address) text(`${STATE.settings.address}\n`);
   text('--------------------------------\n');
   push([ESC,0x61,0x00]); // left align
-  text(`Invoice: ${sale.invoiceNo}\n`);
+  text(`Receipt #: ${sale.invoiceNo}\n`);
   text(`Date: ${fmtDateTime(sale.date)}\n`);
-  if(sale.customerName) text(`Customer: ${sale.customerName}\n`);
+  if(sale.createdByName) text(`Served by: ${sale.createdByName}\n`);
+  text(`Customer: ${sale.customerName||'Walk-in'}\n`);
+  if(sale.collectionStatus==='Pending Collection') text(`Collection: TO BE COLLECTED${sale.expectedCollectionDate?` (${fmtDate(sale.expectedCollectionDate)})`:''}\n`);
   text('--------------------------------\n');
   sale.items.forEach(it=>{
     text(`${it.productName||it.name}\n`);
     text(`  ${fmtNum(it.qty)} ${it.unit||''} x ${money(it.unitPrice)} = ${money(it.lineTotal!=null?it.lineTotal:it.qty*it.unitPrice)}\n`);
   });
   text('--------------------------------\n');
+  text(`Subtotal: ${money(sale.subtotal!=null?sale.subtotal:sale.grandTotal)}\n`);
+  if(sale.discount) text(`Discount: -${money(sale.discount)}\n`);
+  if(sale.tax) text(`Tax (${fmtNum(sale.taxRate||0)}%): ${money(sale.tax)}\n`);
+  if(sale.deliveryFee>0) text(`Delivery Fee: ${money(sale.deliveryFee)}\n`);
   push([ESC,0x21,0x10]); // double-height
   text(`TOTAL: ${money(sale.grandTotal)}\n`);
   push([ESC,0x21,0x00]);
+  if(sale.depositApplied?.amount>0) text(`Deposit Applied: -${money(sale.depositApplied.amount)}\n`);
   if(sale.amountPaid!=null) text(`Paid: ${money(sale.amountPaid)}\n`);
   if(sale.balance) text(`Balance: ${money(sale.balance)}\n`);
+  if(sale.paymentMethod) text(`Payment: ${sale.paymentMethod}\n`);
   text('\n');
   push([ESC,0x61,0x01]);
-  text('Thank you!\n\n\n');
+  text('Thank you for your business!\n\n\n');
   push([GS,0x56,0x00]); // full cut (ignored harmlessly by printers without a cutter)
   return new Uint8Array(bytes);
 }
-async function printReceiptToBluetooth(sale){
+function buildInvoiceEscPos(sale){
+  const enc = new TextEncoder();
+  const bytes = [];
+  const push = (arr)=> bytes.push(...arr);
+  const text = (s)=> push(Array.from(enc.encode(s)));
+  const ESC = 0x1B, GS = 0x1D;
+  const st = STATE.settings;
+  push([ESC,0x40]); // init
+  push([ESC,0x61,0x01]); // center
+  push([ESC,0x21,0x30]);
+  text(`${st.companyName||'Invoice'}\n`);
+  push([ESC,0x21,0x00]);
+  if(st.address) text(`${st.address}\n`);
+  if(st.phone||st.email) text(`${[st.phone,st.email].filter(Boolean).join(' · ')}\n`);
+  push([ESC,0x21,0x08]); // bold-ish emphasis
+  text('INVOICE\n');
+  push([ESC,0x21,0x00]);
+  text('--------------------------------\n');
+  push([ESC,0x61,0x00]);
+  text(`Invoice #: ${sale.invoiceNo}\n`);
+  text(`Date: ${fmtDateTime(sale.date)}\n`);
+  text(`Status: ${sale.status==='void'?'VOID':(sale.paymentStatus||(sale.balance>0?'Partially Paid':'Paid'))}\n`);
+  text('--------------------------------\n');
+  text(`Billed To: ${sale.customerName||'Walk-in Customer'}\n`);
+  if(sale.customerPhone) text(`Phone: ${sale.customerPhone}\n`);
+  if(sale.deliveryFee>0) text(`Delivery to: ${sale.deliveryAddress||'—'}\n`);
+  text('--------------------------------\n');
+  sale.items.forEach(it=>{
+    text(`${it.productName||it.name} (${it.unit||''})\n`);
+    text(`  ${fmtNum(it.qty)} x ${money(it.unitPrice)} = ${money(it.lineTotal!=null?it.lineTotal:it.qty*it.unitPrice)}\n`);
+  });
+  text('--------------------------------\n');
+  text(`Subtotal: ${money(sale.subtotal!=null?sale.subtotal:sale.grandTotal)}\n`);
+  if(sale.discount) text(`Discount: -${money(sale.discount)}\n`);
+  if(sale.tax) text(`Tax (${fmtNum(sale.taxRate||0)}%): ${money(sale.tax)}\n`);
+  if(sale.deliveryFee>0) text(`Delivery Fee: ${money(sale.deliveryFee)}\n`);
+  push([ESC,0x21,0x10]);
+  text(`GRAND TOTAL: ${money(sale.grandTotal)}\n`);
+  push([ESC,0x21,0x00]);
+  if(sale.depositApplied?.amount>0) text(`Deposit Applied: -${money(sale.depositApplied.amount)}\n`);
+  if(sale.amountPaid!=null) text(`Amount Paid: ${money(sale.amountPaid)}\n`);
+  text(`Balance Due: ${money(sale.balance||0)}\n`);
+  if(sale.paymentMethod) text(`Payment Method: ${sale.paymentMethod}\n`);
+  if(sale.notes) text(`Notes: ${sale.notes}\n`);
+  text('\n');
+  push([ESC,0x61,0x01]);
+  text(`${st.companyName||''} — Thank you for your business.\n`);
+  text(`Software by ${st.developedBy||''}\n\n\n`);
+  push([GS,0x56,0x00]);
+  return new Uint8Array(bytes);
+}
+async function printToBluetooth(sale, format){
   if(!btPrinter.char){ toast('No printer connected — go to Settings to connect one','error'); return; }
   try{
-    toast('Printing…');
-    await sendToPrinter(buildReceiptEscPos(sale));
-    toast('Receipt printed');
+    toast(`Printing ${format}…`);
+    const bytes = format==='invoice' ? buildInvoiceEscPos(sale) : buildReceiptEscPos(sale);
+    await sendToPrinter(bytes);
+    toast(`${format==='invoice'?'Invoice':'Receipt'} printed`);
   }catch(err){
     console.error('Print failed:', err);
     toast('Printing failed — check the printer is still on and in range','error');
   }
 }
+// Kept for compatibility with any existing call sites — defaults to the receipt format.
+async function printReceiptToBluetooth(sale){ return printToBluetooth(sale, 'receipt'); }
 
 /* Bluetooth barcode scanner — most scanners pair as a Bluetooth KEYBOARD at the OS level and
    need no code at all (they just type into whatever field is focused, which Sales/Purchases/
