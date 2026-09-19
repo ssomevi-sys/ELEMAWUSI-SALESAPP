@@ -228,7 +228,7 @@ tbody tr:hover{background:var(--surface-2);}
 .modal-header{padding:16px 20px;border-bottom:1px solid var(--border-soft);display:flex;align-items:center;justify-content:space-between;}
 .modal-header h3{font-size:19px;}
 .modal-body{padding:18px 20px;max-height:70vh;overflow-y:auto;-webkit-overflow-scrolling:touch;}
-.modal-footer{padding:14px 20px;border-top:1px solid var(--border-soft);display:flex;justify-content:flex-end;gap:10px;}
+.modal-footer{padding:14px 20px;border-top:1px solid var(--border-soft);display:flex;flex-wrap:wrap;justify-content:flex-end;gap:10px;}
 
 /* toast */
 #toastRoot{position:fixed;bottom:20px;right:20px;z-index:900;display:flex;flex-direction:column;gap:8px;}
@@ -503,7 +503,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
- apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+  apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -3878,7 +3878,7 @@ function printInvoice(s){
   const logo = st.logoDataUrl || LOGO_DATA_URI;
   return `
     <div class="rc-center">
-      ${logo? `<img src="${logo}" alt="Logo" style="max-height:50px;max-width:180px;margin-bottom:6px">`:''}
+      ${logo? `<img src="${logo}" alt="Logo" style="max-height:90px;max-width:260px;margin-bottom:8px">`:''}
       <div class="rc-title">${esc(st.companyName)}</div>
       ${st.address? `<div>${esc(st.address)}</div>`:''}
       ${st.phone? `<div>Tel: ${esc(st.phone)}</div>`:''}
@@ -5092,7 +5092,48 @@ async function sendToPrinter(bytes){
 }
 // Builds a plain ESC/POS byte sequence for a receipt. Kept deliberately simple (no logos,
 // no barcodes on the paper itself) for the widest possible printer compatibility.
-function buildReceiptEscPos(sale){
+// Converts an image into the ESC/POS 'GS v 0' raster bitmap command — the standard way a
+// plain-text thermal printer prints an actual image, since it has no other way to show
+// graphics. Resizes to a safe printable width and converts to pure black/white first.
+function imageToEscPosRaster(dataUrl, targetWidthPx){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    img.onerror = ()=> reject(new Error('Could not load logo image'));
+    img.onload = ()=>{
+      try{
+        const scale = targetWidthPx / img.width;
+        const w = targetWidthPx;
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff'; ctx.fillRect(0,0,w,h);
+        ctx.drawImage(img, 0, 0, w, h);
+        const imgData = ctx.getImageData(0,0,w,h).data;
+        const widthBytes = Math.ceil(w/8);
+        const bytes = [0x1D,0x76,0x30,0x00, widthBytes & 0xFF, (widthBytes>>8) & 0xFF, h & 0xFF, (h>>8) & 0xFF];
+        for(let y=0; y<h; y++){
+          for(let xByte=0; xByte<widthBytes; xByte++){
+            let byte = 0;
+            for(let bit=0; bit<8; bit++){
+              const x = xByte*8 + bit;
+              if(x < w){
+                const idx = (y*w + x) * 4;
+                const luminance = imgData[idx]*0.299 + imgData[idx+1]*0.587 + imgData[idx+2]*0.114;
+                const isDark = imgData[idx+3] > 128 && luminance < 160;
+                if(isDark) byte |= (0x80 >> bit);
+              }
+            }
+            bytes.push(byte);
+          }
+        }
+        resolve(new Uint8Array(bytes));
+      }catch(err){ reject(err); }
+    };
+    img.src = dataUrl;
+  });
+}
+async function buildReceiptEscPos(sale){
   const enc = new TextEncoder();
   const bytes = [];
   const push = (arr)=> bytes.push(...arr);
@@ -5100,6 +5141,11 @@ function buildReceiptEscPos(sale){
   const ESC = 0x1B, GS = 0x1D;
   push([ESC,0x40]); // init
   push([ESC,0x61,0x01]); // center
+  const logoSrc = STATE.settings.logoDataUrl || (typeof LOGO_DATA_URI!=='undefined'? LOGO_DATA_URI : null);
+  if(logoSrc){
+    try{ push(Array.from(await imageToEscPosRaster(logoSrc, 300))); push([0x0A]); }
+    catch(err){ console.error('Logo print skipped:', err); }
+  }
   push([ESC,0x21,0x30]); // double-width/height
   text(`${STATE.settings.companyName||'Receipt'}\n`);
   push([ESC,0x21,0x00]); // normal size
@@ -5137,7 +5183,7 @@ function buildReceiptEscPos(sale){
   push([GS,0x56,0x00]); // full cut (ignored harmlessly by printers without a cutter)
   return new Uint8Array(bytes);
 }
-function buildInvoiceEscPos(sale){
+async function buildInvoiceEscPos(sale){
   const enc = new TextEncoder();
   const bytes = [];
   const push = (arr)=> bytes.push(...arr);
@@ -5146,6 +5192,11 @@ function buildInvoiceEscPos(sale){
   const st = STATE.settings;
   push([ESC,0x40]); // init
   push([ESC,0x61,0x01]); // center
+  const logoSrc = st.logoDataUrl || (typeof LOGO_DATA_URI!=='undefined'? LOGO_DATA_URI : null);
+  if(logoSrc){
+    try{ push(Array.from(await imageToEscPosRaster(logoSrc, 300))); push([0x0A]); }
+    catch(err){ console.error('Logo print skipped:', err); }
+  }
   push([ESC,0x21,0x30]);
   text(`${st.companyName||'Invoice'}\n`);
   push([ESC,0x21,0x00]);
@@ -5192,7 +5243,7 @@ async function printToBluetooth(sale, format){
   if(!btPrinter.char){ toast('No printer connected — go to Settings to connect one','error'); return; }
   try{
     toast(`Printing ${format}…`);
-    const bytes = format==='invoice' ? buildInvoiceEscPos(sale) : buildReceiptEscPos(sale);
+    const bytes = format==='invoice' ? await buildInvoiceEscPos(sale) : await buildReceiptEscPos(sale);
     await sendToPrinter(bytes);
     toast(`${format==='invoice'?'Invoice':'Receipt'} printed`);
   }catch(err){
