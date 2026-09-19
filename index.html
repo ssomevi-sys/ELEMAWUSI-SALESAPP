@@ -503,7 +503,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
-  apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+   apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -3817,8 +3817,7 @@ function printInvoice(s){
   document.body.classList.remove('printing-receipt');
   byId('printArea').innerHTML = `<div class="invoice-doc">${invoiceHtml(s)}</div>`;
   window.print();
-}
-function receiptHtml(s){
+}function receiptHtml(s){
   const st = STATE.settings;
   return `
     <div class="rc-center">
@@ -3861,7 +3860,6 @@ function printReceipt(s){
   document.body.classList.add('printing-receipt');
   byId('printArea').innerHTML = `<div class="receipt-doc">${receiptHtml(s)}</div>`;
   window.print();
-  setTimeout(()=>document.body.classList.remove('printing-receipt'), 600);
 }
 
 /* ============================================================
