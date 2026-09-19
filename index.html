@@ -503,7 +503,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
-  apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+ apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -514,7 +514,6 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const fsdb = firebase.firestore();
-
 // Offline support: cache data locally and queue writes made while offline, syncing them
 // automatically once the connection returns. Must be called before any other Firestore call.
 let offlinePersistenceReady = false;
@@ -1460,7 +1459,7 @@ function renderInventory(){
           const bom = invShowTrash ? null : activeBomFor(p.id);
           return `<tr>
             <td><b>${esc(p.name)}</b>${bom?` <span class="badge badge-info" title="Sold by deducting its components' stock">🧩 Kit</span>`:''}${p.dimensions?`<div class="hint">${esc(p.dimensions)}</div>`:''}
-              ${bom? `<div class="hint" style="margin-top:3px">Made of: ${bom.components.map(c=>{ const cp = STATE.products.find(x=>x.id==c.productId); return cp? `${fmtNum(c.qty)} ${esc(c.unit||cp.unit)} ${esc(cp.name)}` : '(missing product)'; }).join(', ')}</div>` : ''}
+              ${bom? `<div class="hint" style="margin-top:3px">Made of: ${bom.components.map(c=>{ const cp = STATE.products.find(x=>x.id==c.productId); return cp? `${fmtNum(c.qty)} ${esc(c.unit||cp.unit)} ${esc(cp.name)} (${money(cp.sellingPrice)} each)` : '(missing product)'; }).join(', ')}</div>` : ''}
             </td>
             <td>${esc(p.category)}</td>
             <td class="mono">${esc(p.sku||'—')}</td>
@@ -3421,7 +3420,7 @@ function renderLineItemsRows(){
         Made of: ${bom.components.map(c=>{
         const cp = STATE.products.find(x=>x.id==c.productId);
         if(!cp) return '(missing product)';
-        return `${fmtNum(c.qty)} ${esc(c.unit||cp.unit)} ${esc(cp.name)} <button type="button" class="btn btn-sm" style="padding:1px 6px;font-size:11px" data-action="addComponentLine" data-row="${it.id}" data-component-id="${cp.id}" title="Add ${esc(cp.name)} as its own separate line">+ Sell separately</button>`;
+        return `${fmtNum(c.qty)} ${esc(c.unit||cp.unit)} ${esc(cp.name)} — ${money(cp.sellingPrice)} <button type="button" class="btn btn-sm" style="padding:1px 6px;font-size:11px" data-action="addComponentLine" data-row="${it.id}" data-component-id="${cp.id}" title="Add ${esc(cp.name)} as its own separate line">+ Sell separately</button>`;
       }).join(', ')}</div>` : '';
     return `<tr data-row="${it.id}">
       <td style="min-width:220px">${productSearchHtml('prod', it.id, it.productId)}${kitHint}</td>
