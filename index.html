@@ -2978,7 +2978,7 @@ function openBomBuilder(existing){
   STATE.bomDraft = {
     editingId: existing? existing.id : null,
     kitProductId: existing? existing.kitProductId : '',
-    components: existing? existing.components.map(c=>({id:uid(), productId:c.productId, qty:c.qty, unit:c.unit})) : [{id:uid(), productId:'', qty:1, unit:''}],
+    components: existing? existing.components.map(c=>({id:uid(), productId:c.productId, qty:c.qty, unit:c.unit, costOverride:c.costOverride!=null?c.costOverride:'', sellingPrice:c.sellingPrice!=null?c.sellingPrice:''})) : [{id:uid(), productId:'', qty:1, unit:'', costOverride:'', sellingPrice:''}],
     notes: existing? (existing.notes||'') : ''
   };
   STATE.suppliesSubView = 'bomBuilder';
@@ -2990,10 +2990,12 @@ function renderBomComponentRows(){
     const units = sellUnitsFor(p);
     const unitSelect = p? `<select data-role="bomunit" data-row="${c.id}">${units.map(u=>`<option value="${esc(u.name)}" ${c.unit===u.name?'selected':''}>${esc(u.name)}</option>`).join('')}</select>` : `<select data-role="bomunit" data-row="${c.id}" disabled><option>—</option></select>`;
     const costVal = (c.costOverride!=null && c.costOverride!=='') ? c.costOverride : (p? p.costPrice : '');
+    const priceVal = (c.sellingPrice!=null && c.sellingPrice!=='') ? c.sellingPrice : (p? p.sellingPrice : '');
     return `<tr data-row="${c.id}">
       <td style="min-width:220px">${productSearchHtml('bomcomp', c.id, c.productId)}</td>
       <td style="min-width:110px">${unitSelect}</td>
       <td><input type="number" min="0" step="0.0001" data-role="bomqty" data-row="${c.id}" value="${c.qty}" style="width:100px"></td>
+      <td><input type="number" min="0" step="0.01" data-role="bomprice" data-row="${c.id}" value="${priceVal}" placeholder="price" style="width:100px" title="What this member sells for on its own — saving the kit updates this product's actual Selling Price so it shows automatically in Sales"></td>
       <td><input type="number" min="0" step="0.01" data-role="bomcost" data-row="${c.id}" value="${costVal}" placeholder="auto" style="width:100px" title="Cost per unit for this component within this kit — defaults to the product's own cost price, but can be overridden here"></td>
       <td class="right"><button class="icon-btn" data-action="removeBomLine" data-row="${c.id}">${iconTrash()}</button></td>
     </tr>`;
@@ -3011,10 +3013,10 @@ function renderBomBuilder(){
           ${productSearchHtml('bomkit', 'kit', d.kitProductId)}
         </div>
         <div class="field">
-          <label>Made Up Of (Components) <span class="hint" style="font-weight:400">Cost per Unit defaults to that product's own cost price — only fill it in if this component should be costed differently within this specific kit.</span></label>
+          <label>Made Up Of (Components) <span class="hint" style="font-weight:400">Selling Price is what this member charges when sold on its own — saving updates that product's real price, so it shows automatically in Sales. Cost per Unit is only for this kit's own cost tracking and defaults to the product's own cost price.</span></label>
           <div class="table-wrap">
           <table>
-            <thead><tr><th style="width:34%">Component Product</th><th>Unit</th><th>Qty per 1 ${kit? esc(kit.unit):'kit unit'}</th><th>Cost per Unit</th><th></th></tr></thead>
+            <thead><tr><th style="width:30%">Component Product</th><th>Unit</th><th>Qty per 1 ${kit? esc(kit.unit):'kit unit'}</th><th>Selling Price</th><th>Cost per Unit</th><th></th></tr></thead>
             <tbody id="bomComponentsBody">${renderBomComponentRows()}</tbody>
           </table>
           </div>
@@ -3054,7 +3056,7 @@ function wireBomBuilderEvents(){
     }
   });
   byId('addBomLineBtn').addEventListener('click', ()=>{
-    d.components.push({id:uid(), productId:'', qty:1, unit:'', costOverride:''});
+    d.components.push({id:uid(), productId:'', qty:1, unit:'', costOverride:'', sellingPrice:''});
     byId('bomComponentsBody').innerHTML = renderBomComponentRows();
   });
   byId('bomComponentsBody').addEventListener('change', (e)=>{
@@ -3066,12 +3068,14 @@ function wireBomBuilderEvents(){
     if(q){ const row = d.components.find(c=>c.id==q.dataset.row); if(row) row.qty = parseFloat(q.value)||0; }
     const co = e.target.closest('[data-role="bomcost"]');
     if(co){ const row = d.components.find(c=>c.id==co.dataset.row); if(row) row.costOverride = co.value; }
+    const pr = e.target.closest('[data-role="bomprice"]');
+    if(pr){ const row = d.components.find(c=>c.id==pr.dataset.row); if(row) row.sellingPrice = pr.value; }
   });
   byId('bomComponentsBody').addEventListener('click', (e)=>{
     const rm = e.target.closest('[data-action="removeBomLine"]');
     if(rm){
       d.components = d.components.filter(c=>c.id!=rm.dataset.row);
-      if(d.components.length===0) d.components.push({id:uid(), productId:'', qty:1, unit:'', costOverride:''});
+      if(d.components.length===0) d.components.push({id:uid(), productId:'', qty:1, unit:'', costOverride:'', sellingPrice:''});
       byId('bomComponentsBody').innerHTML = renderBomComponentRows();
     }
   });
@@ -3082,7 +3086,7 @@ async function saveBom(){
   try{
     const kitId = selectedProductIdFromSearch('bomkit') || d.kitProductId;
     if(!kitId){ toast('Choose a kit product','error'); return; }
-    const components = d.components.filter(c=>c.productId && c.qty>0).map(c=>({productId:c.productId, qty:Number(c.qty), unit:c.unit||(STATE.products.find(p=>p.id==c.productId)||{}).unit, costOverride:(c.costOverride!=null && c.costOverride!=='')? Number(c.costOverride) : null}));
+    const components = d.components.filter(c=>c.productId && c.qty>0).map(c=>({productId:c.productId, qty:Number(c.qty), unit:c.unit||(STATE.products.find(p=>p.id==c.productId)||{}).unit, costOverride:(c.costOverride!=null && c.costOverride!=='')? Number(c.costOverride) : null, sellingPrice:(c.sellingPrice!=null && c.sellingPrice!=='')? Number(c.sellingPrice) : null}));
     if(components.length===0){ toast('Add at least one component with a quantity','error'); return; }
     if(components.some(c=>String(c.productId)===String(kitId))){ toast('A kit cannot contain itself as a component','error'); return; }
     // Only an ACTIVE existing BOM blocks a new one — an inactive one shouldn't stop you from
@@ -3093,9 +3097,23 @@ async function saveBom(){
     const rec = d.editingId? {...STATE.boms.find(b=>b.id==d.editingId)} : {createdAt:now, active:true, branch:STATE.currentBranch};
     Object.assign(rec, {kitProductId:kitId, components, notes: byId('bom_notes').value.trim(), updatedAt:now});
     await putRec('boms', rec);
+    // Write each member's allocated price onto its actual product record, so it shows up
+    // automatically the moment that member is picked in Sales — Sales already reads a
+    // product's own Selling Price, this is just what was missing to feed it correctly.
+    let pricesUpdated = 0;
+    for(const c of components){
+      if(c.sellingPrice==null) continue;
+      const cp = STATE.products.find(x=>x.id==c.productId);
+      if(cp && Number(cp.sellingPrice)!==c.sellingPrice){
+        cp.sellingPrice = c.sellingPrice;
+        cp.updatedAt = now;
+        await putRec('products', cp);
+        pricesUpdated++;
+      }
+    }
     await refreshAll();
     STATE.suppliesSubView = 'bom';
-    toast('Bill of Materials saved');
+    toast(pricesUpdated>0? `Bill of Materials saved — ${pricesUpdated} member price(s) updated` : 'Bill of Materials saved');
     render();
   }catch(err){
     console.error('Failed to save Bill of Materials:', err);
