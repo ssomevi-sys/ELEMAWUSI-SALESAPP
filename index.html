@@ -721,6 +721,14 @@ function startLiveSync(){
 function esc(s){ return String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmtNum(n){ return Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function money(n){ return (STATE.settings?.currencySymbol||'GH₵') + ' ' + fmtNum(n); }
+// Cheap thermal printers use old single-byte character sets and can't render the ₵ symbol
+// (or most non-ASCII currency symbols) correctly — each byte of it gets shown as a random,
+// unrelated character instead. Bluetooth ESC/POS printing uses this plain-ASCII version.
+function escPosMoney(n){
+  const raw = STATE.settings?.currencySymbol || 'GHS';
+  const safeSymbol = /^[\x00-\x7F]+$/.test(raw) ? raw : 'GHS';
+  return safeSymbol + ' ' + fmtNum(n);
+}
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function fmtDate(s){ if(!s) return '—'; const d=new Date(s); return d.toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'}); }
 function fmtDateTime(s){ const d=new Date(s); return d.toLocaleString(undefined,{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
@@ -1459,11 +1467,11 @@ function renderInventory(){
             <td>${esc(p.unit)}</td>
             <td class="right mono">${bom? `${money(effectiveCostPerUnit(p))}<div class="hint">from recipe</div>` : money(p.costPrice)}</td>
             <td class="right mono">${money(p.sellingPrice)}</td>
-            <td class="right mono">${bom? `<span class="hint">made to order</span>` : `${fmtNum(p.stockQty)} ${esc(p.unit)}
+            <td class="right mono">${bom? `<b>${fmtNum(availableSetsFor(p))}</b> ${esc(p.unit)} available<div class="hint">from component stock</div>` : `${fmtNum(p.stockQty)} ${esc(p.unit)}
               ${stockBreakdownHtml(p)}
               ${invShowTrash?'':`<span class="stock-bar ${low?'low':''}"><span style="width:${Math.max(6,pct)}%"></span></span>`}`}
             </td>
-            <td>${invShowTrash? '<span class="badge badge-bad">Deleted</span>' : bom? '<span class="badge badge-ok">Kit — always available</span>' : (low? '<span class="badge badge-bad">Low Stock</span>' : '<span class="badge badge-ok">In Stock</span>')}</td>
+            <td>${invShowTrash? '<span class="badge badge-bad">Deleted</span>' : bom? (availableSetsFor(p)<=0? '<span class="badge badge-bad">Out of Components</span>' : '<span class="badge badge-ok">Kit — In Stock</span>') : (low? '<span class="badge badge-bad">Low Stock</span>' : '<span class="badge badge-ok">In Stock</span>')}</td>
             <td class="right">
               ${invShowTrash? `
                 <button class="icon-btn" title="Restore" data-action="restore-product" data-id="${p.id}">↩️</button>
@@ -2876,6 +2884,24 @@ function toBaseQty(p, unitName, qty){
 function activeBomFor(productId){
   return (STATE.boms||[]).find(b => String(b.kitProductId)===String(productId) && b.active!==false);
 }
+// How many COMPLETE kits can be assembled right now from current component stock — the
+// bottleneck component (the one that runs out first) sets the limit. Recalculated live from
+// real stock, so it automatically drops the instant ANY component sells, whether that
+// component was sold on its own or as part of a whole kit.
+function availableSetsFor(kitProduct){
+  const bom = activeBomFor(kitProduct.id);
+  if(!bom || !bom.components || !bom.components.length) return null;
+  let minSets = Infinity;
+  for(const c of bom.components){
+    const cp = STATE.products.find(x=>x.id==c.productId);
+    if(!cp) return 0; // a component was deleted — treat as zero available until fixed
+    const perKit = toBaseQty(cp, c.unit||cp.unit, c.qty);
+    if(perKit<=0) continue;
+    const possible = Math.floor((Number(cp.stockQty)||0) / perKit);
+    minSets = Math.min(minSets, possible);
+  }
+  return minSets===Infinity ? 0 : Math.max(0, minSets);
+}
 // Returns [{productId, qty}], where qty is the BASE-unit stock change (always positive — the
 // caller decides the sign) needed for selling `qty` of `p` in `unit`. If `p` is a kit (has an
 // active BOM), the movement is against its components instead of the kit product itself.
@@ -3370,7 +3396,11 @@ function renderLineItemsRows(){
     const baseQty = p? toBaseQty(p, it.unit, it.qty) : Number(it.qty);
     const stockHint = p? `<div class="hint">= ${fmtNum(baseQty)} ${esc(p.unit)} of stock</div>` : '';
     const bom = p? activeBomFor(p.id) : null;
-    const kitHint = bom? `<div class="hint" style="margin-top:4px;line-height:1.6">🧩 Kit — made of: ${bom.components.map(c=>{
+    const availSets = bom? availableSetsFor(p) : null;
+    const notEnough = bom && Number(it.qty) > availSets;
+    const kitHint = bom? `<div class="hint" style="margin-top:4px;line-height:1.6">
+        🧩 Kit — <span style="${notEnough?'color:var(--danger);font-weight:600':''}">${fmtNum(availSets)} ${esc(p.unit)} available</span> from component stock${notEnough?' — not enough to cover this quantity!':''}<br>
+        Made of: ${bom.components.map(c=>{
         const cp = STATE.products.find(x=>x.id==c.productId);
         if(!cp) return '(missing product)';
         return `${fmtNum(c.qty)} ${esc(c.unit||cp.unit)} ${esc(cp.name)} <button type="button" class="btn btn-sm" style="padding:1px 6px;font-size:11px" data-action="addComponentLine" data-row="${it.id}" data-component-id="${cp.id}" title="Add ${esc(cp.name)} as its own separate line">+ Sell separately</button>`;
@@ -5059,19 +5089,19 @@ function buildReceiptEscPos(sale){
   text('--------------------------------\n');
   sale.items.forEach(it=>{
     text(`${it.productName||it.name}\n`);
-    text(`  ${fmtNum(it.qty)} ${it.unit||''} x ${money(it.unitPrice)} = ${money(it.lineTotal!=null?it.lineTotal:it.qty*it.unitPrice)}\n`);
+    text(`  ${fmtNum(it.qty)} ${it.unit||''} x ${escPosMoney(it.unitPrice)} = ${escPosMoney(it.lineTotal!=null?it.lineTotal:it.qty*it.unitPrice)}\n`);
   });
   text('--------------------------------\n');
-  text(`Subtotal: ${money(sale.subtotal!=null?sale.subtotal:sale.grandTotal)}\n`);
-  if(sale.discount) text(`Discount: -${money(sale.discount)}\n`);
-  if(sale.tax) text(`Tax (${fmtNum(sale.taxRate||0)}%): ${money(sale.tax)}\n`);
-  if(sale.deliveryFee>0) text(`Delivery Fee: ${money(sale.deliveryFee)}\n`);
+  text(`Subtotal: ${escPosMoney(sale.subtotal!=null?sale.subtotal:sale.grandTotal)}\n`);
+  if(sale.discount) text(`Discount: -${escPosMoney(sale.discount)}\n`);
+  if(sale.tax) text(`Tax (${fmtNum(sale.taxRate||0)}%): ${escPosMoney(sale.tax)}\n`);
+  if(sale.deliveryFee>0) text(`Delivery Fee: ${escPosMoney(sale.deliveryFee)}\n`);
   push([ESC,0x21,0x10]); // double-height
-  text(`TOTAL: ${money(sale.grandTotal)}\n`);
+  text(`TOTAL: ${escPosMoney(sale.grandTotal)}\n`);
   push([ESC,0x21,0x00]);
-  if(sale.depositApplied?.amount>0) text(`Deposit Applied: -${money(sale.depositApplied.amount)}\n`);
-  if(sale.amountPaid!=null) text(`Paid: ${money(sale.amountPaid)}\n`);
-  if(sale.balance) text(`Balance: ${money(sale.balance)}\n`);
+  if(sale.depositApplied?.amount>0) text(`Deposit Applied: -${escPosMoney(sale.depositApplied.amount)}\n`);
+  if(sale.amountPaid!=null) text(`Paid: ${escPosMoney(sale.amountPaid)}\n`);
+  if(sale.balance) text(`Balance: ${escPosMoney(sale.balance)}\n`);
   if(sale.paymentMethod) text(`Payment: ${sale.paymentMethod}\n`);
   text('\n');
   push([ESC,0x61,0x01]);
@@ -5094,7 +5124,7 @@ function buildInvoiceEscPos(sale){
   text(`${st.companyName||'Invoice'}\n`);
   push([ESC,0x21,0x00]);
   if(st.address) text(`${st.address}\n`);
-  if(st.phone||st.email) text(`${[st.phone,st.email].filter(Boolean).join(' · ')}\n`);
+  if(st.phone||st.email) text(`${[st.phone,st.email].filter(Boolean).join(' | ')}\n`);
   push([ESC,0x21,0x08]); // bold-ish emphasis
   text('INVOICE\n');
   push([ESC,0x21,0x00]);
@@ -5106,28 +5136,28 @@ function buildInvoiceEscPos(sale){
   text('--------------------------------\n');
   text(`Billed To: ${sale.customerName||'Walk-in Customer'}\n`);
   if(sale.customerPhone) text(`Phone: ${sale.customerPhone}\n`);
-  if(sale.deliveryFee>0) text(`Delivery to: ${sale.deliveryAddress||'—'}\n`);
+  if(sale.deliveryFee>0) text(`Delivery to: ${sale.deliveryAddress||'-'}\n`);
   text('--------------------------------\n');
   sale.items.forEach(it=>{
     text(`${it.productName||it.name} (${it.unit||''})\n`);
-    text(`  ${fmtNum(it.qty)} x ${money(it.unitPrice)} = ${money(it.lineTotal!=null?it.lineTotal:it.qty*it.unitPrice)}\n`);
+    text(`  ${fmtNum(it.qty)} x ${escPosMoney(it.unitPrice)} = ${escPosMoney(it.lineTotal!=null?it.lineTotal:it.qty*it.unitPrice)}\n`);
   });
   text('--------------------------------\n');
-  text(`Subtotal: ${money(sale.subtotal!=null?sale.subtotal:sale.grandTotal)}\n`);
-  if(sale.discount) text(`Discount: -${money(sale.discount)}\n`);
-  if(sale.tax) text(`Tax (${fmtNum(sale.taxRate||0)}%): ${money(sale.tax)}\n`);
-  if(sale.deliveryFee>0) text(`Delivery Fee: ${money(sale.deliveryFee)}\n`);
+  text(`Subtotal: ${escPosMoney(sale.subtotal!=null?sale.subtotal:sale.grandTotal)}\n`);
+  if(sale.discount) text(`Discount: -${escPosMoney(sale.discount)}\n`);
+  if(sale.tax) text(`Tax (${fmtNum(sale.taxRate||0)}%): ${escPosMoney(sale.tax)}\n`);
+  if(sale.deliveryFee>0) text(`Delivery Fee: ${escPosMoney(sale.deliveryFee)}\n`);
   push([ESC,0x21,0x10]);
-  text(`GRAND TOTAL: ${money(sale.grandTotal)}\n`);
+  text(`GRAND TOTAL: ${escPosMoney(sale.grandTotal)}\n`);
   push([ESC,0x21,0x00]);
-  if(sale.depositApplied?.amount>0) text(`Deposit Applied: -${money(sale.depositApplied.amount)}\n`);
-  if(sale.amountPaid!=null) text(`Amount Paid: ${money(sale.amountPaid)}\n`);
-  text(`Balance Due: ${money(sale.balance||0)}\n`);
+  if(sale.depositApplied?.amount>0) text(`Deposit Applied: -${escPosMoney(sale.depositApplied.amount)}\n`);
+  if(sale.amountPaid!=null) text(`Amount Paid: ${escPosMoney(sale.amountPaid)}\n`);
+  text(`Balance Due: ${escPosMoney(sale.balance||0)}\n`);
   if(sale.paymentMethod) text(`Payment Method: ${sale.paymentMethod}\n`);
   if(sale.notes) text(`Notes: ${sale.notes}\n`);
   text('\n');
   push([ESC,0x61,0x01]);
-  text(`${st.companyName||''} — Thank you for your business.\n`);
+  text(`${st.companyName||''} - Thank you for your business.\n`);
   text(`Software by ${st.developedBy||''}\n\n\n`);
   push([GS,0x56,0x00]);
   return new Uint8Array(bytes);
