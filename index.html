@@ -503,7 +503,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
-  apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+   apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -514,6 +514,7 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const fsdb = firebase.firestore();
+
 // Offline support: cache data locally and queue writes made while offline, syncing them
 // automatically once the connection returns. Must be called before any other Firestore call.
 let offlinePersistenceReady = false;
@@ -1458,19 +1459,19 @@ function renderInventory(){
           const pct = Math.min(100, p.reorderLevel? (p.stockQty/(p.reorderLevel*2))*100 : 100);
           const bom = invShowTrash ? null : activeBomFor(p.id);
           return `<tr>
-            <td><b>${esc(p.name)}</b>${bom?` <span class="badge badge-info" title="Sold by deducting its components' stock">🧩 Kit</span>`:''}${p.dimensions?`<div class="hint">${esc(p.dimensions)}</div>`:''}
+            <td><b>${esc(p.name)}</b>${bom?` <span class="badge badge-info" title="Has its own real stock, sold and deducted like any product — this badge just means a Bill of Materials is on file describing what's inside">🧩 Kit</span>`:''}${p.dimensions?`<div class="hint">${esc(p.dimensions)}</div>`:''}
               ${bom? `<div class="hint" style="margin-top:3px"><b>1 ${esc(p.unit)} = ${fmtNum(bom.components.reduce((sum,c)=>sum+Number(c.qty||0),0))} pieces total</b> — Made of: ${bom.components.map(c=>{ const cp = STATE.products.find(x=>x.id==c.productId); return cp? `${fmtNum(c.qty)} ${esc(c.unit||cp.unit)} ${esc(cp.name)} (${money(cp.sellingPrice)} each)` : '(missing product)'; }).join(', ')}</div>` : ''}
             </td>
             <td>${esc(p.category)}</td>
             <td class="mono">${esc(p.sku||'—')}</td>
             <td>${esc(p.unit)}</td>
-            <td class="right mono">${bom? `${money(effectiveCostPerUnit(p))}<div class="hint">from recipe</div>` : money(p.costPrice)}</td>
+            <td class="right mono">${money(p.costPrice)}</td>
             <td class="right mono">${money(p.sellingPrice)}</td>
-            <td class="right mono">${bom? `<b>${fmtNum(availableSetsFor(p))}</b> ${esc(p.unit)} available<div class="hint">from component stock</div>` : `${fmtNum(p.stockQty)} ${esc(p.unit)}
+            <td class="right mono">${fmtNum(p.stockQty)} ${esc(p.unit)}
               ${stockBreakdownHtml(p)}
-              ${invShowTrash?'':`<span class="stock-bar ${low?'low':''}"><span style="width:${Math.max(6,pct)}%"></span></span>`}`}
+              ${invShowTrash?'':`<span class="stock-bar ${low?'low':''}"><span style="width:${Math.max(6,pct)}%"></span></span>`}
             </td>
-            <td>${invShowTrash? '<span class="badge badge-bad">Deleted</span>' : bom? (availableSetsFor(p)<=0? '<span class="badge badge-bad">Out of Components</span>' : '<span class="badge badge-ok">Kit — In Stock</span>') : (low? '<span class="badge badge-bad">Low Stock</span>' : '<span class="badge badge-ok">In Stock</span>')}</td>
+            <td>${invShowTrash? '<span class="badge badge-bad">Deleted</span>' : (low? '<span class="badge badge-bad">Low Stock</span>' : '<span class="badge badge-ok">In Stock</span>')}</td>
             <td class="right">
               ${invShowTrash? `
                 <button class="icon-btn" title="Restore" data-action="restore-product" data-id="${p.id}">↩️</button>
@@ -2856,8 +2857,6 @@ function productOptions(selId){
 }
 function productLabel(p){
   if(!p) return '';
-  const bom = activeBomFor(p.id);
-  if(bom) return `${p.name} — ${fmtNum(availableSetsFor(p))} ${p.unit} available (from components)`;
   return `${p.name} — stock ${fmtNum(p.stockQty)} ${p.unit}`;
 }
 // Returns the base-stock-unit equivalent quantity for a sale line item, whether it's an
@@ -2890,17 +2889,15 @@ function toBaseQty(p, unitName, qty){
 function activeBomFor(productId){
   return (STATE.boms||[]).find(b => String(b.kitProductId)===String(productId) && b.active!==false);
 }
-// How many COMPLETE kits can be assembled right now from current component stock — the
-// bottleneck component (the one that runs out first) sets the limit. Recalculated live from
-// real stock, so it automatically drops the instant ANY component sells, whether that
-// component was sold on its own or as part of a whole kit.
+// Kept for reference/possible future use, but no longer used to drive Inventory or Sales
+// display — a kit's own stock field is now the real, authoritative number (see below).
 function availableSetsFor(kitProduct){
   const bom = activeBomFor(kitProduct.id);
   if(!bom || !bom.components || !bom.components.length) return null;
   let minSets = Infinity;
   for(const c of bom.components){
     const cp = STATE.products.find(x=>x.id==c.productId);
-    if(!cp) return 0; // a component was deleted — treat as zero available until fixed
+    if(!cp) return 0;
     const perKit = toBaseQty(cp, c.unit||cp.unit, c.qty);
     if(perKit<=0) continue;
     const possible = Math.floor((Number(cp.stockQty)||0) / perKit);
@@ -2908,31 +2905,19 @@ function availableSetsFor(kitProduct){
   }
   return minSets===Infinity ? 0 : Math.max(0, minSets);
 }
-// Returns [{productId, qty}], where qty is the BASE-unit stock change (always positive — the
-// caller decides the sign) needed for selling `qty` of `p` in `unit`. If `p` is a kit (has an
-// active BOM), the movement is against its components instead of the kit product itself.
+// Returns [{productId, qty}] — the BASE-unit stock change (always positive; the caller decides
+// the sign) for selling `qty` of `p` in `unit`. A kit now deducts from its OWN stock, exactly
+// like any other product — a Bill of Materials records what's inside a kit and each member's
+// own price, purely as useful information, but no longer redirects the actual stock deduction
+// to the components. Selling a member on its own already deducted its own stock the same way,
+// so this makes kit sales and member sales behave consistently with each other.
 function stockMovementsFor(p, unit, qty){
-  const kitBaseQty = toBaseQty(p, unit, qty);
-  const bom = activeBomFor(p.id);
-  if(!bom || !bom.components || !bom.components.length) return [{productId:p.id, qty:kitBaseQty}];
-  return bom.components.map(c=>{
-    const cp = STATE.products.find(x=>x.id==c.productId);
-    const perKit = cp? toBaseQty(cp, c.unit||cp.unit, c.qty) : (Number(c.qty)||0);
-    return {productId:c.productId, qty: perKit * kitBaseQty};
-  });
+  return [{productId:p.id, qty: toBaseQty(p, unit, qty)}];
 }
-// The cost of one base unit of `p` — for a kit, this is the rolled-up cost of its components,
-// since a kit product usually doesn't carry its own cost price.
+// The cost of one base unit of `p` — now just the product's own cost price, since a kit is a
+// normally-stocked, normally-costed product like any other.
 function effectiveCostPerUnit(p){
-  const bom = activeBomFor(p.id);
-  if(!bom || !bom.components || !bom.components.length) return Number(p.costPrice)||0;
-  return bom.components.reduce((sum,c)=>{
-    const cp = STATE.products.find(x=>x.id==c.productId);
-    if(!cp) return sum;
-    const perKit = toBaseQty(cp, c.unit||cp.unit, c.qty);
-    const unitCost = (c.costOverride!=null) ? Number(c.costOverride) : (Number(cp.costPrice)||0);
-    return sum + perKit*unitCost;
-  }, 0);
+  return Number(p.costPrice)||0;
 }
 // Applies (or, with sign -1, reverses) the stock movements for selling `qty` of `p` in `unit`
 // into a running {productId: delta} ledger, without touching the database yet.
@@ -2949,7 +2934,7 @@ async function applyMovementLedger(ledger){
 function renderBomList(){
   const rows = STATE.boms.filter(inBranch);
   return `
-    <div class="help-box">A Bill of Materials turns one product into a "Kit" made up of other products. Selling a kit deducts stock from its components (converted into each component's own unit) instead of the kit product itself — the kit's own stock quantity is not used.</div>
+    <div class="help-box">A Bill of Materials records what a "Kit" product is made of, and lets you set each member's own selling price. The kit's own stock is what gets deducted when the whole kit sells — same as any product — and each member also has its own separate stock, deducted normally when sold on its own.</div>
     <div class="panel">
       <div class="panel-toolbar">
         <button class="btn" data-action="back-to-supplies">← Back to Purchases</button>
@@ -2958,11 +2943,11 @@ function renderBomList(){
       </div>
       <div class="table-wrap">
       <table>
-        <thead><tr><th>Kit Product</th><th class="right">Components</th><th>Est. Component Cost</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Kit Product</th><th class="right">Members Listed</th><th>Kit's Own Cost Price</th><th>Status</th><th></th></tr></thead>
         <tbody>
         ${rows.length? rows.map(b=>{
           const kit = STATE.products.find(p=>p.id==b.kitProductId);
-          const cost = kit? effectiveCostPerUnit(kit) : 0;
+          const cost = kit? Number(kit.costPrice)||0 : 0;
           return `<tr>
             <td>${kit? esc(kit.name) : '<span class="hint">Product deleted</span>'}</td>
             <td class="right mono">${(b.components||[]).length}</td>
@@ -2997,10 +2982,14 @@ function renderBomComponentRows(){
     const unitSelect = p? `<select data-role="bomunit" data-row="${c.id}">${units.map(u=>`<option value="${esc(u.name)}" ${c.unit===u.name?'selected':''}>${esc(u.name)}</option>`).join('')}</select>` : `<select data-role="bomunit" data-row="${c.id}" disabled><option>—</option></select>`;
     const costVal = (c.costOverride!=null && c.costOverride!=='') ? c.costOverride : (p? p.costPrice : '');
     const priceVal = (c.sellingPrice!=null && c.sellingPrice!=='') ? c.sellingPrice : (p? p.sellingPrice : '');
+    let qtyHint = '';
+    if(p && Number(c.qty)>0){
+      qtyHint = `<div class="hint" id="bomQtyHint_${c.id}" style="white-space:nowrap">Reference only — doesn't affect stock. ${p.name}'s own stock (${fmtNum(p.stockQty)} ${esc(p.unit)}) is managed separately.</div>`;
+    }
     return `<tr data-row="${c.id}">
       <td style="min-width:220px">${productSearchHtml('bomcomp', c.id, c.productId)}</td>
       <td style="min-width:110px">${unitSelect}</td>
-      <td><input type="number" min="0" step="0.0001" data-role="bomqty" data-row="${c.id}" value="${c.qty}" style="width:100px"></td>
+      <td><input type="number" min="0" step="0.0001" data-role="bomqty" data-row="${c.id}" value="${c.qty}" style="width:100px">${qtyHint}</td>
       <td><input type="number" min="0" step="0.01" data-role="bomprice" data-row="${c.id}" value="${priceVal}" placeholder="price" style="width:100px" title="What this member sells for on its own — saving the kit updates this product's actual Selling Price so it shows automatically in Sales"></td>
       <td><input type="number" min="0" step="0.01" data-role="bomcost" data-row="${c.id}" value="${costVal}" placeholder="auto" style="width:100px" title="Cost per unit for this component within this kit — defaults to the product's own cost price, but can be overridden here"></td>
       <td class="right"><button class="icon-btn" data-action="removeBomLine" data-row="${c.id}">${iconTrash()}</button></td>
@@ -3018,12 +3007,12 @@ function renderBomBuilder(){
           <label>Kit Product <span class="hint" style="font-weight:400">(the finished item customers buy)</span></label>
           ${productSearchHtml('bomkit', 'kit', d.kitProductId)}
         </div>
+        <div class="help-box">The kit's own stock (set in Inventory, adjusted the normal way) is what actually gets deducted when you sell the whole kit — same as any product. Each member below is also its own separate product with its own real stock, deducted normally when sold on its own. This list below is just useful information: what's inside the kit, and each member's own selling price (which updates that product's real price when you save).</div>
         <div class="field">
-          <label>Made Up Of (Components) <span class="hint" style="font-weight:400">Selling Price is what this member charges when sold on its own — saving updates that product's real price, so it shows automatically in Sales. Cost per Unit is only for this kit's own cost tracking and defaults to the product's own cost price.</span></label>
-          <div class="help-box" style="margin-bottom:10px">⚠️ The Qty column below is how many of that item are inside <b>ONE</b> ${kit?esc(kit.unit):'kit unit'} — e.g. if one assorted padlock set contains 3 pieces of a 30mm padlock, enter <b>3</b> there. Do NOT enter how many you have in total stock — that's tracked on the product itself, in Inventory.</div>
+          <label>Made Up Of (Members) <span class="hint" style="font-weight:400">Selling Price is what this member charges when sold on its own — saving updates that product's real price, so it shows automatically in Sales. Qty is just for the "made of" description shown in Inventory and Sales — it doesn't affect any stock deduction.</span></label>
           <div class="table-wrap">
           <table>
-            <thead><tr><th style="width:30%">Component Product</th><th>Unit</th><th>Qty in ONE ${kit? esc(kit.unit):'kit unit'} (not your total stock)</th><th>Selling Price</th><th>Cost per Unit</th><th></th></tr></thead>
+            <thead><tr><th style="width:30%">Member Product</th><th>Unit</th><th>Qty (for reference only)</th><th>Selling Price</th><th>Cost per Unit</th><th></th></tr></thead>
             <tbody id="bomComponentsBody">${renderBomComponentRows()}</tbody>
           </table>
           </div>
@@ -3072,7 +3061,10 @@ function wireBomBuilderEvents(){
   });
   byId('bomComponentsBody').addEventListener('input', (e)=>{
     const q = e.target.closest('[data-role="bomqty"]');
-    if(q){ const row = d.components.find(c=>c.id==q.dataset.row); if(row) row.qty = parseFloat(q.value)||0; }
+    if(q){
+      const row = d.components.find(c=>c.id==q.dataset.row);
+      if(row) row.qty = parseFloat(q.value)||0;
+    }
     const co = e.target.closest('[data-role="bomcost"]');
     if(co){ const row = d.components.find(c=>c.id==co.dataset.row); if(row) row.costOverride = co.value; }
     const pr = e.target.closest('[data-role="bomprice"]');
@@ -3435,11 +3427,8 @@ function renderLineItemsRows(){
     const baseQty = p? toBaseQty(p, it.unit, it.qty) : Number(it.qty);
     const stockHint = p? `<div class="hint">= ${fmtNum(baseQty)} ${esc(p.unit)} of stock</div>` : '';
     const bom = p? activeBomFor(p.id) : null;
-    const availSets = bom? availableSetsFor(p) : null;
-    const notEnough = bom && Number(it.qty) > availSets;
     const kitHint = bom? `<div class="hint" style="margin-top:4px;line-height:1.6">
-        🧩 Kit — <span style="${notEnough?'color:var(--danger);font-weight:600':''}">${fmtNum(availSets)} ${esc(p.unit)} available</span> from component stock${notEnough?' — not enough to cover this quantity!':''}<br>
-        <b>1 ${esc(p.unit)} = ${fmtNum(bom.components.reduce((sum,c)=>sum+Number(c.qty||0),0))} pieces total</b> — Made of: ${bom.components.map(c=>{
+        🧩 Kit — <b>1 ${esc(p.unit)} = ${fmtNum(bom.components.reduce((sum,c)=>sum+Number(c.qty||0),0))} pieces total</b> — Made of: ${bom.components.map(c=>{
         const cp = STATE.products.find(x=>x.id==c.productId);
         if(!cp) return '(missing product)';
         return `${fmtNum(c.qty)} ${esc(c.unit||cp.unit)} ${esc(cp.name)} — ${money(cp.sellingPrice)} <button type="button" class="btn btn-sm" style="padding:1px 6px;font-size:11px" data-action="addComponentLine" data-row="${it.id}" data-component-id="${cp.id}" title="Add ${esc(cp.name)} as its own separate line">+ Sell separately</button>`;
