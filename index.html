@@ -3202,20 +3202,14 @@ function wireProductSearch(container, onSelect){
     if(!input) return;
     input.dataset.selected = '';
     showList(input, input.value);
-    // Fallback for scanners configured to send Tab, nothing, or anything other than Enter
-    // after a scan: a scanner types far faster than any human can (well under 40ms between
-    // characters). If characters are arriving that fast, wait for a brief pause (meaning the
-    // scan has finished) and check whether the completed text matches a barcode — this works
-    // no matter how the scanner itself is configured, without needing to change any setting on it.
-    const now = performance.now();
-    const prevTime = Number(input.dataset.lastCharTime)||0;
-    const gap = prevTime? now-prevTime : Infinity;
-    input.dataset.lastCharTime = String(now);
+    // Fallback for scanners that don't send Enter (or send Tab/nothing instead): whatever just
+    // changed the box, wait briefly for things to settle, then check if the text exactly
+    // matches a real barcode. This works regardless of how the browser delivered the
+    // characters — one at a time, or all inserted at once (common with fast scanners) — so it
+    // doesn't depend on any timing assumption about how the scanner or browser behaves.
     clearTimeout(scanFallbackTimers.get(input));
-    if(gap < 40){
-      const timer = setTimeout(()=>{ trySelectByBarcode(input, input.value.trim()); }, 80);
-      scanFallbackTimers.set(input, timer);
-    }
+    const timer = setTimeout(()=>{ trySelectByBarcode(input, input.value.trim()); }, 150);
+    scanFallbackTimers.set(input, timer);
   });
   container.addEventListener('focusin', (e)=>{
     const input = e.target.closest('.prod-search-input');
