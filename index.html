@@ -503,7 +503,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
-   apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+  apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -514,7 +514,6 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const fsdb = firebase.firestore();
-
 // Offline support: cache data locally and queue writes made while offline, syncing them
 // automatically once the connection returns. Must be called before any other Firestore call.
 let offlinePersistenceReady = false;
@@ -6056,6 +6055,11 @@ function exportSalesCsv(){
 }
 
 /* ---------------- boot ---------------- */
+// Disables the browser's right-click menu across the whole app. Note: this is a deterrent
+// against casual right-clicking only — it does not hide or protect the underlying code, since
+// anyone can still view source (Ctrl+U), open DevTools (F12), or use the browser's own menu.
+// Client-side code is always visible to whoever loads the page; no script can change that.
+document.addEventListener('contextmenu', (e)=> e.preventDefault());
 init();
 </script>
 </body>
