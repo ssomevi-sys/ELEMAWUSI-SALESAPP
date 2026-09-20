@@ -1754,7 +1754,9 @@ async function saveProduct(existing){
   const savedId = await putRec('products', rec);
   if(!rec.barcode){
     // Auto-generate now that we know the product's id (needed for brand-new products).
-    rec.barcode = `EV${String(savedId).padStart(8,'0')}`;
+    // Purely numeric — letters can get mistyped by some scanners if their configured keyboard
+    // layout doesn't exactly match the device, while digits are universal across every layout.
+    rec.barcode = `200${String(savedId).padStart(10,'0')}`;
     await putRec('products', rec);
   }
   if(priceChanged){
@@ -3158,6 +3160,8 @@ function productSearchHtml(role, rowId, selId){
 /* Wires searchable product pickers within `container` (a DOM element). Whenever a product is
    picked, `onSelect(rowId, productId)` fires so the caller can update its own row state. */
 function wireProductSearch(container, onSelect){
+  // Tracks the pending 'did a scan just finish?' timer per input, for the fast-typing fallback below.
+  const scanFallbackTimers = new WeakMap();
   const showList = (input, query)=>{
     const rowId = input.dataset.row, role = input.dataset.role;
     const list = container.querySelector(`.prod-search-list[data-role="${role}"][data-row="${rowId}"]`);
@@ -3170,30 +3174,48 @@ function wireProductSearch(container, onSelect){
       : `<div class="prod-search-empty">No matching products</div>`) + extraNote;
     list.classList.add('show');
   };
-  // A barcode scanner just types characters fast and sends Enter — so if what's currently in
-  // the box exactly matches a product's barcode, select it immediately without needing the
-  // dropdown at all. This is what makes scanning (or manually keying in a barcode) fast.
-  container.addEventListener('keydown', (e)=>{
-    if(e.key !== 'Enter') return;
-    const input = e.target.closest('.prod-search-input');
-    if(!input) return;
-    const raw = input.value.trim();
-    if(!raw) return;
+  // Shared by both scan-detection paths below: if the given text exactly matches a product's
+  // barcode, select it immediately without needing the dropdown at all.
+  const trySelectByBarcode = (input, raw)=>{
+    if(!raw) return false;
     const match = activeProducts().find(p=> p.barcode && p.barcode.toLowerCase()===raw.toLowerCase());
-    if(!match) return;
-    e.preventDefault();
+    if(!match) return false;
     input.value = productLabel(match);
     input.dataset.selected = match.id;
     const list = container.querySelector(`.prod-search-list[data-role="${input.dataset.role}"][data-row="${input.dataset.row}"]`);
     if(list){ list.classList.remove('show'); list.innerHTML=''; }
     onSelect(input.dataset.row, match.id);
     container.dispatchEvent(new CustomEvent('barcode-product-selected', {detail:{rowId:input.dataset.row, productId:match.id}, bubbles:true}));
+    return true;
+  };
+  // A barcode scanner just types characters fast and sends Enter — so if what's currently in
+  // the box exactly matches a product's barcode, select it immediately. This is what makes
+  // scanning (or manually keying in a barcode) fast, for scanners configured to send Enter.
+  container.addEventListener('keydown', (e)=>{
+    if(e.key !== 'Enter') return;
+    const input = e.target.closest('.prod-search-input');
+    if(!input) return;
+    if(trySelectByBarcode(input, input.value.trim())) e.preventDefault();
   });
   container.addEventListener('input', (e)=>{
     const input = e.target.closest('.prod-search-input');
     if(!input) return;
     input.dataset.selected = '';
     showList(input, input.value);
+    // Fallback for scanners configured to send Tab, nothing, or anything other than Enter
+    // after a scan: a scanner types far faster than any human can (well under 40ms between
+    // characters). If characters are arriving that fast, wait for a brief pause (meaning the
+    // scan has finished) and check whether the completed text matches a barcode — this works
+    // no matter how the scanner itself is configured, without needing to change any setting on it.
+    const now = performance.now();
+    const prevTime = Number(input.dataset.lastCharTime)||0;
+    const gap = prevTime? now-prevTime : Infinity;
+    input.dataset.lastCharTime = String(now);
+    clearTimeout(scanFallbackTimers.get(input));
+    if(gap < 40){
+      const timer = setTimeout(()=>{ trySelectByBarcode(input, input.value.trim()); }, 80);
+      scanFallbackTimers.set(input, timer);
+    }
   });
   container.addEventListener('focusin', (e)=>{
     const input = e.target.closest('.prod-search-input');
