@@ -503,7 +503,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
-  apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+    apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -2690,28 +2690,31 @@ function iconReturn(){return `<svg viewBox="0 0 24 24" fill="none" stroke="curre
 
 /* ---- Returns & Refunds (sales-rep request, admin authorization) ---- */
 function returnStatusBadge(status){
-  const cls = status==='Refunded'?'badge-ok': status==='Rejected'?'badge-muted':'badge-warn';
+  const cls = (status==='Refunded'||status==='Exchanged')?'badge-ok': status==='Rejected'?'badge-muted':'badge-warn';
   return `<span class="badge ${cls}">${esc(status)}</span>`;
 }
 function returnsHistoryHtml(list, isAdmin){
   if(list.length===0) return `<p class="hint">No return requests for this invoice yet.</p>`;
-  return list.map(r=>`
+  return list.map(r=>{
+    const isExchange = r.type==='exchange';
+    return `
     <div class="panel" style="margin-bottom:10px;padding:12px">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <div><b>${fmtDate(r.date)}</b> — ${returnStatusBadge(r.status)}</div>
-        <div class="right mono">${money(r.totalRefund)}</div>
+        <div><b>${fmtDate(r.date)}</b> ${isExchange? '<span class="badge badge-info">Exchange</span>' : '<span class="badge badge-muted">Refund</span>'} — ${returnStatusBadge(r.status)}</div>
+        <div class="right mono">${isExchange? `Diff: ${money(r.balanceDifference||0)}` : money(r.totalRefund)}</div>
       </div>
-      <div class="hint" style="margin-top:4px">${r.items.map(it=>`${fmtNum(it.qty)} × ${esc(it.productName)}`).join(', ')}</div>
+      <div class="hint" style="margin-top:4px">Returned: ${r.items.map(it=>`${fmtNum(it.qty)} × ${esc(it.productName)}`).join(', ')}</div>
+      ${isExchange? `<div class="hint">Given instead: ${(r.replacementItems||[]).map(it=>`${fmtNum(it.qty)} × ${esc(it.productName)}`).join(', ')}</div>` : ''}
       <div class="hint">Reason: ${esc(r.reason)}</div>
       <div class="hint">Requested by ${esc(r.requestedBy)}${r.authorizedBy? ` · ${r.status==='Rejected'?'Rejected':'Authorized'} by ${esc(r.authorizedBy)}`:''}</div>
       ${r.status==='Pending Authorization' && isAdmin? `
         <div style="margin-top:8px;display:flex;gap:8px">
-          <button class="btn btn-sm btn-primary" data-action="authorize-return" data-id="${r.id}">Authorize Refund</button>
+          <button class="btn btn-sm btn-primary" data-action="authorize-return" data-id="${r.id}">${isExchange?'Authorize Exchange':'Authorize Refund'}</button>
           <button class="btn btn-sm" data-action="reject-return" data-id="${r.id}">Reject</button>
         </div>` : ''}
       ${r.status==='Pending Authorization' && !isAdmin? `<p class="hint" style="margin-top:6px">Waiting for admin authorization.</p>`:''}
     </div>
-  `).join('');
+  `;}).join('');
 }
 function openReturnsModal(saleId){
   const s = STATE.sales.find(x=>x.id==saleId); if(!s) return;
@@ -2721,7 +2724,7 @@ function openReturnsModal(saleId){
     <p>Invoice <b class="mono">${esc(s.invoiceNo)}</b> — ${esc(s.customerName||'Walk-in')}</p>
     <div id="returnsHistoryBox">${returnsHistoryHtml(existing, isAdmin)}</div>
     <hr style="margin:14px 0">
-    <button class="btn" id="newReturnRequestBtn">＋ Request Item Return / Refund</button>
+    <button class="btn" id="newReturnRequestBtn">＋ Request Return, Refund, or Exchange</button>
   `;
   openModal('Returns & Refunds', body, `<button class="btn" data-action="closeModal">Close</button>`, true);
   byId('newReturnRequestBtn').addEventListener('click', ()=>openReturnRequestForm(s));
@@ -2733,6 +2736,12 @@ function wireReturnsHistoryEvents(){
 }
 function openReturnRequestForm(s){
   const body = `
+    <div class="field"><label>Request Type</label>
+      <select id="ret_type">
+        <option value="refund">Refund only</option>
+        <option value="exchange">Exchange for a different item</option>
+      </select>
+    </div>
     <p class="hint">Select the item(s) the customer is returning and the quantity for each.</p>
     <div class="table-wrap"><table>
       <thead><tr><th></th><th>Item</th><th class="right">Sold Qty</th><th class="right">Return Qty</th><th class="right">Unit Price</th></tr></thead>
@@ -2746,21 +2755,95 @@ function openReturnRequestForm(s){
         </tr>`).join('')}
       </tbody>
     </table></div>
+    <div id="exchangeSection" style="display:none;margin-top:14px">
+      <hr>
+      <p class="hint" style="margin-top:10px">What is the customer taking instead? Add the replacement item(s) and quantity.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Replacement Product</th><th class="right">Qty</th><th class="right">Unit Price</th><th class="right">Line Total</th><th></th></tr></thead>
+        <tbody id="exchangeItemsBody"></tbody>
+      </table></div>
+      <button type="button" class="btn btn-sm" style="margin-top:8px" id="addExchangeLineBtn">＋ Add Replacement Item</button>
+      <div class="rline grand" style="margin-top:10px" id="exchangeDiffBox"></div>
+    </div>
     <div class="field" style="margin-top:10px"><label>Reason *</label><input type="text" id="ret_reason" placeholder="e.g. Wrong size delivered, customer changed mind"></div>
     <div class="field"><label>Notes</label><textarea id="ret_notes" rows="2"></textarea></div>
   `;
-  openModal('Request Item Return / Refund', body, `<button class="btn" data-action="closeModal">Cancel</button><button class="btn btn-primary" id="submitReturnBtn">Submit for Authorization</button>`, true);
+  openModal('Request Return, Refund, or Exchange', body, `<button class="btn" data-action="closeModal">Cancel</button><button class="btn btn-primary" id="submitReturnBtn">Submit for Authorization</button>`, true);
+  STATE.exchangeDraft = { items: [] };
   document.querySelectorAll('.ret-item-chk').forEach(chk=>{
     chk.addEventListener('change', (e)=>{
       const qtyInput = document.querySelector(`.ret-item-qty[data-idx="${e.target.dataset.idx}"]`);
       qtyInput.disabled = !e.target.checked;
+      updateExchangeDiff(s);
     });
   });
+  document.querySelectorAll('.ret-item-qty').forEach(inp=> inp.addEventListener('input', ()=>updateExchangeDiff(s)));
+  byId('ret_type').addEventListener('change', (e)=>{
+    byId('exchangeSection').style.display = e.target.value==='exchange' ? '' : 'none';
+    updateExchangeDiff(s);
+  });
+  byId('addExchangeLineBtn').addEventListener('click', ()=>{
+    STATE.exchangeDraft.items.push({id:uid(), productId:'', qty:1, unitPrice:0});
+    renderExchangeItemsRows();
+  });
+  wireProductSearch(byId('exchangeItemsBody'), (rowId, productId)=>{
+    const row = STATE.exchangeDraft.items.find(it=>it.id==rowId);
+    if(!row) return;
+    row.productId = productId;
+    const p = STATE.products.find(x=>x.id==productId);
+    if(p) row.unitPrice = p.sellingPrice;
+    renderExchangeItemsRows();
+    updateExchangeDiff(s);
+  });
+  byId('exchangeItemsBody').addEventListener('input', (e)=>{
+    const q = e.target.closest('[data-role="exqty"]');
+    if(q){ const row = STATE.exchangeDraft.items.find(it=>it.id==q.dataset.row); if(row) row.qty = parseFloat(q.value)||0; }
+    const pr = e.target.closest('[data-role="exprice"]');
+    if(pr){ const row = STATE.exchangeDraft.items.find(it=>it.id==pr.dataset.row); if(row) row.unitPrice = parseFloat(pr.value)||0; }
+    renderExchangeItemsRows(true);
+    updateExchangeDiff(s);
+  });
+  byId('exchangeItemsBody').addEventListener('click', (e)=>{
+    const rm = e.target.closest('[data-action="removeExchangeLine"]');
+    if(rm){
+      STATE.exchangeDraft.items = STATE.exchangeDraft.items.filter(it=>it.id!=rm.dataset.row);
+      renderExchangeItemsRows();
+      updateExchangeDiff(s);
+    }
+  });
   byId('submitReturnBtn').addEventListener('click', ()=>submitReturnRequest(s));
+}
+function renderExchangeItemsRows(skipInputs){
+  byId('exchangeItemsBody').innerHTML = STATE.exchangeDraft.items.map(it=>`
+    <tr data-row="${it.id}">
+      <td style="min-width:200px">${productSearchHtml('exprod', it.id, it.productId)}</td>
+      <td class="right"><input type="number" min="0" step="0.01" data-role="exqty" data-row="${it.id}" value="${it.qty}" style="width:80px"></td>
+      <td class="right"><input type="number" min="0" step="0.01" data-role="exprice" data-row="${it.id}" value="${it.unitPrice}" style="width:100px"></td>
+      <td class="right mono">${money(Number(it.qty)*Number(it.unitPrice))}</td>
+      <td class="right"><button class="icon-btn" data-action="removeExchangeLine" data-row="${it.id}">${iconTrash()}</button></td>
+    </tr>`).join('');
+}
+function updateExchangeDiff(s){
+  const box = byId('exchangeDiffBox');
+  if(!box) return;
+  const type = byId('ret_type').value;
+  if(type!=='exchange'){ box.innerHTML=''; return; }
+  let returnValue = 0;
+  document.querySelectorAll('.ret-item-chk:checked').forEach(chk=>{
+    const idx = Number(chk.dataset.idx);
+    const qtyInput = document.querySelector(`.ret-item-qty[data-idx="${idx}"]`);
+    const qty = parseFloat(qtyInput.value)||0;
+    returnValue += qty * s.items[idx].unitPrice;
+  });
+  const replacementValue = STATE.exchangeDraft.items.reduce((sum,it)=> sum + Number(it.qty)*Number(it.unitPrice), 0);
+  const diff = replacementValue - returnValue;
+  box.innerHTML = `<span>Returned value: ${money(returnValue)} &nbsp;|&nbsp; Replacement value: ${money(replacementValue)}</span>
+    <span style="color:${diff>0?'var(--danger)':diff<0?'var(--success)':'inherit'}">${diff>0? `Customer owes ${money(diff)} more` : diff<0? `Refund ${money(Math.abs(diff))} to customer` : 'Even exchange — no balance change'}</span>`;
 }
 async function submitReturnRequest(s){
   const reason = byId('ret_reason').value.trim();
   if(!reason){ toast('Please enter a reason','error'); return; }
+  const type = byId('ret_type')?.value || 'refund';
   const items = [];
   document.querySelectorAll('.ret-item-chk:checked').forEach(chk=>{
     const idx = Number(chk.dataset.idx);
@@ -2773,49 +2856,87 @@ async function submitReturnRequest(s){
   });
   if(items.length===0){ toast('Select at least one item and a valid quantity','error'); return; }
   const totalRefund = items.reduce((a,it)=>a+it.refundAmount,0);
+  let replacementItems = [], replacementValue = 0;
+  if(type==='exchange'){
+    replacementItems = (STATE.exchangeDraft?.items||[]).filter(it=>it.productId && it.qty>0).map(it=>{
+      const p = STATE.products.find(x=>x.id==it.productId);
+      return {productId:it.productId, productName:p?p.name:'', unit:p?p.unit:'', qty:Number(it.qty), unitPrice:Number(it.unitPrice)};
+    });
+    if(replacementItems.length===0){ toast('Add at least one replacement item for an exchange','error'); return; }
+    replacementValue = replacementItems.reduce((a,it)=>a+it.qty*it.unitPrice,0);
+  }
   const now = new Date().toISOString();
   const rec = {
-    saleId:s.id, invoiceNo:s.invoiceNo, date: todayStr(), customerName:s.customerName||'Walk-in',
-    items, reason, notes: byId('ret_notes').value.trim(), totalRefund,
+    type, saleId:s.id, invoiceNo:s.invoiceNo, date: todayStr(), customerName:s.customerName||'Walk-in',
+    items, replacementItems, totalRefund, replacementValue, balanceDifference: replacementValue-totalRefund,
+    reason, notes: byId('ret_notes').value.trim(),
     status:'Pending Authorization', requestedBy: STATE.currentUser.fullName||STATE.currentUser.username,
     authorizedBy:null, authorizedDate:null, branch: s.branch||STATE.currentBranch, createdAt:now, updatedAt:now
   };
   await putRec('returns', rec);
   await refreshAll();
   closeModal();
-  toast('Return request submitted — awaiting admin authorization');
+  toast(type==='exchange'? 'Exchange request submitted — awaiting admin authorization' : 'Return request submitted — awaiting admin authorization');
   render();
 }
 async function authorizeReturn(id){
   const r = STATE.returns.find(x=>x.id==id); if(!r) return;
-  confirmDialog(`Authorize this refund of ${money(r.totalRefund)} for invoice ${r.invoiceNo}? Stock will be restored for the returned item(s) and the sale's paid amount will be reduced accordingly.`, async ()=>{
+  const isExchange = r.type==='exchange';
+  if(isExchange){
+    const short = (r.replacementItems||[]).filter(it=>{
+      const p = STATE.products.find(pp=>pp.id==it.productId);
+      return !p || Number(p.stockQty) < it.qty;
+    });
+    if(short.length){
+      const names = short.map(it=>it.productName).join(', ');
+      if(!confirm(`Not enough stock for: ${names}. Authorizing anyway will let that item's stock go negative — continue?`)) return;
+    }
+  }
+  const confirmMsg = isExchange
+    ? `Authorize this exchange for invoice ${r.invoiceNo}? Stock will be restored for the returned item(s) and deducted for the replacement item(s), and the sale's balance will be adjusted by ${money(r.balanceDifference)}.`
+    : `Authorize this refund of ${money(r.totalRefund)} for invoice ${r.invoiceNo}? Stock will be restored for the returned item(s) and the sale's paid amount will be reduced accordingly.`;
+  confirmDialog(confirmMsg, async ()=>{
     const now = new Date().toISOString();
     const ledger = {};
     for(const it of r.items){
       const p = STATE.products.find(pp=>pp.id==it.productId);
       if(p) accumulateMovement(ledger, p, it.unit||p.unit, it.qty, +1);
     }
+    if(isExchange){
+      for(const it of (r.replacementItems||[])){
+        const p = STATE.products.find(pp=>pp.id==it.productId);
+        if(p) accumulateMovement(ledger, p, it.unit||p.unit, it.qty, -1);
+      }
+    }
     await applyMovementLedger(ledger);
     for(const [pid, delta] of Object.entries(ledger)){
       if(Math.abs(delta)<1e-9) continue;
       const cp = STATE.products.find(x=>x.id==pid);
-      await putRec('stockLog', {productId:pid, productName:cp?cp.name:pid, type:'return-in', qty:delta, resultingStock: cp? cp.stockQty : null, reason:`Customer return — Invoice ${r.invoiceNo}`, date:now, branch:r.branch||'main'});
+      const kind = delta>0 ? 'return-in' : 'exchange-out';
+      const reason = delta>0 ? `Customer return — Invoice ${r.invoiceNo}` : `Given in exchange — Invoice ${r.invoiceNo}`;
+      await putRec('stockLog', {productId:pid, productName:cp?cp.name:pid, type:kind, qty:delta, resultingStock: cp? cp.stockQty : null, reason, date:now, branch:r.branch||'main'});
     }
     const s = STATE.sales.find(x=>x.id==r.saleId);
     if(s){
-      s.amountPaid = Math.max(0, Number(s.amountPaid) - r.totalRefund);
-      s.balance = Number(s.grandTotal) - s.amountPaid;
-      if(s.amountPaid<=0) s.paymentStatus='Unpaid';
-      else if(s.amountPaid>=s.grandTotal) s.paymentStatus='Paid';
+      if(isExchange){
+        s.grandTotal = Number(s.grandTotal) - r.totalRefund + r.replacementValue;
+        s.balance = Number(s.grandTotal) - Number(s.amountPaid);
+      }else{
+        s.amountPaid = Math.max(0, Number(s.amountPaid) - r.totalRefund);
+        s.balance = Number(s.grandTotal) - s.amountPaid;
+      }
+      if(s.balance<=0) s.paymentStatus='Paid';
+      else if(s.amountPaid<=0) s.paymentStatus='Unpaid';
       else s.paymentStatus='Partial';
       s.updatedAt = now;
       await putRec('sales', s);
     }
-    r.status='Refunded'; r.authorizedBy = STATE.currentUser.fullName||STATE.currentUser.username; r.authorizedDate=now; r.updatedAt=now;
+    r.status = isExchange? 'Exchanged' : 'Refunded';
+    r.authorizedBy = STATE.currentUser.fullName||STATE.currentUser.username; r.authorizedDate=now; r.updatedAt=now;
     await putRec('returns', r);
     await refreshAll();
     closeModal();
-    toast('Refund authorized and processed — stock updated');
+    toast(isExchange? 'Exchange authorized and processed — stock updated' : 'Refund authorized and processed — stock updated');
     render();
   });
 }
