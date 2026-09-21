@@ -503,7 +503,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
-    apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+  apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -2690,18 +2690,22 @@ function iconReturn(){return `<svg viewBox="0 0 24 24" fill="none" stroke="curre
 
 /* ---- Returns & Refunds (sales-rep request, admin authorization) ---- */
 function returnStatusBadge(status){
-  const cls = (status==='Refunded'||status==='Exchanged')?'badge-ok': status==='Rejected'?'badge-muted':'badge-warn';
+  const cls = (status==='Refunded'||status==='Exchanged'||status==='Returned')?'badge-ok': status==='Rejected'?'badge-muted':'badge-warn';
   return `<span class="badge ${cls}">${esc(status)}</span>`;
 }
 function returnsHistoryHtml(list, isAdmin){
   if(list.length===0) return `<p class="hint">No return requests for this invoice yet.</p>`;
   return list.map(r=>{
     const isExchange = r.type==='exchange';
+    const isPlainReturn = r.type==='return';
+    const typeBadge = isExchange? '<span class="badge badge-info">Exchange</span>' : isPlainReturn? '<span class="badge badge-muted">Item Return</span>' : '<span class="badge badge-muted">Refund</span>';
+    const valueCol = isExchange? `Diff: ${money(r.balanceDifference||0)}` : isPlainReturn? '<span class="hint">No refund</span>' : money(r.totalRefund);
+    const authorizeLabel = isExchange? 'Authorize Exchange' : isPlainReturn? 'Authorize Item Return' : 'Authorize Refund';
     return `
     <div class="panel" style="margin-bottom:10px;padding:12px">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <div><b>${fmtDate(r.date)}</b> ${isExchange? '<span class="badge badge-info">Exchange</span>' : '<span class="badge badge-muted">Refund</span>'} — ${returnStatusBadge(r.status)}</div>
-        <div class="right mono">${isExchange? `Diff: ${money(r.balanceDifference||0)}` : money(r.totalRefund)}</div>
+        <div><b>${fmtDate(r.date)}</b> ${typeBadge} — ${returnStatusBadge(r.status)}</div>
+        <div class="right mono">${valueCol}</div>
       </div>
       <div class="hint" style="margin-top:4px">Returned: ${r.items.map(it=>`${fmtNum(it.qty)} × ${esc(it.productName)}`).join(', ')}</div>
       ${isExchange? `<div class="hint">Given instead: ${(r.replacementItems||[]).map(it=>`${fmtNum(it.qty)} × ${esc(it.productName)}`).join(', ')}</div>` : ''}
@@ -2709,7 +2713,7 @@ function returnsHistoryHtml(list, isAdmin){
       <div class="hint">Requested by ${esc(r.requestedBy)}${r.authorizedBy? ` · ${r.status==='Rejected'?'Rejected':'Authorized'} by ${esc(r.authorizedBy)}`:''}</div>
       ${r.status==='Pending Authorization' && isAdmin? `
         <div style="margin-top:8px;display:flex;gap:8px">
-          <button class="btn btn-sm btn-primary" data-action="authorize-return" data-id="${r.id}">${isExchange?'Authorize Exchange':'Authorize Refund'}</button>
+          <button class="btn btn-sm btn-primary" data-action="authorize-return" data-id="${r.id}">${authorizeLabel}</button>
           <button class="btn btn-sm" data-action="reject-return" data-id="${r.id}">Reject</button>
         </div>` : ''}
       ${r.status==='Pending Authorization' && !isAdmin? `<p class="hint" style="margin-top:6px">Waiting for admin authorization.</p>`:''}
@@ -2738,7 +2742,8 @@ function openReturnRequestForm(s){
   const body = `
     <div class="field"><label>Request Type</label>
       <select id="ret_type">
-        <option value="refund">Refund only</option>
+        <option value="return">Item Return only (no refund, no exchange)</option>
+        <option value="refund">Refund</option>
         <option value="exchange">Exchange for a different item</option>
       </select>
     </div>
@@ -2876,12 +2881,14 @@ async function submitReturnRequest(s){
   await putRec('returns', rec);
   await refreshAll();
   closeModal();
-  toast(type==='exchange'? 'Exchange request submitted — awaiting admin authorization' : 'Return request submitted — awaiting admin authorization');
+  const typeLabel = type==='exchange'? 'Exchange' : type==='return'? 'Item return' : 'Refund';
+  toast(`${typeLabel} request submitted — awaiting admin authorization`);
   render();
 }
 async function authorizeReturn(id){
   const r = STATE.returns.find(x=>x.id==id); if(!r) return;
   const isExchange = r.type==='exchange';
+  const isPlainReturn = r.type==='return';
   if(isExchange){
     const short = (r.replacementItems||[]).filter(it=>{
       const p = STATE.products.find(pp=>pp.id==it.productId);
@@ -2894,6 +2901,8 @@ async function authorizeReturn(id){
   }
   const confirmMsg = isExchange
     ? `Authorize this exchange for invoice ${r.invoiceNo}? Stock will be restored for the returned item(s) and deducted for the replacement item(s), and the sale's balance will be adjusted by ${money(r.balanceDifference)}.`
+    : isPlainReturn
+    ? `Authorize this item return for invoice ${r.invoiceNo}? Stock will be restored for the returned item(s). No refund or balance change will be made — the sale's payment record stays exactly as it is.`
     : `Authorize this refund of ${money(r.totalRefund)} for invoice ${r.invoiceNo}? Stock will be restored for the returned item(s) and the sale's paid amount will be reduced accordingly.`;
   confirmDialog(confirmMsg, async ()=>{
     const now = new Date().toISOString();
@@ -2916,22 +2925,25 @@ async function authorizeReturn(id){
       const reason = delta>0 ? `Customer return — Invoice ${r.invoiceNo}` : `Given in exchange — Invoice ${r.invoiceNo}`;
       await putRec('stockLog', {productId:pid, productName:cp?cp.name:pid, type:kind, qty:delta, resultingStock: cp? cp.stockQty : null, reason, date:now, branch:r.branch||'main'});
     }
-    const s = STATE.sales.find(x=>x.id==r.saleId);
-    if(s){
-      if(isExchange){
-        s.grandTotal = Number(s.grandTotal) - r.totalRefund + r.replacementValue;
-        s.balance = Number(s.grandTotal) - Number(s.amountPaid);
-      }else{
-        s.amountPaid = Math.max(0, Number(s.amountPaid) - r.totalRefund);
-        s.balance = Number(s.grandTotal) - s.amountPaid;
+    // A plain item return only restores stock — the sale's payment record is left untouched.
+    if(!isPlainReturn){
+      const s = STATE.sales.find(x=>x.id==r.saleId);
+      if(s){
+        if(isExchange){
+          s.grandTotal = Number(s.grandTotal) - r.totalRefund + r.replacementValue;
+          s.balance = Number(s.grandTotal) - Number(s.amountPaid);
+        }else{
+          s.amountPaid = Math.max(0, Number(s.amountPaid) - r.totalRefund);
+          s.balance = Number(s.grandTotal) - s.amountPaid;
+        }
+        if(s.balance<=0) s.paymentStatus='Paid';
+        else if(s.amountPaid<=0) s.paymentStatus='Unpaid';
+        else s.paymentStatus='Partial';
+        s.updatedAt = now;
+        await putRec('sales', s);
       }
-      if(s.balance<=0) s.paymentStatus='Paid';
-      else if(s.amountPaid<=0) s.paymentStatus='Unpaid';
-      else s.paymentStatus='Partial';
-      s.updatedAt = now;
-      await putRec('sales', s);
     }
-    r.status = isExchange? 'Exchanged' : 'Refunded';
+    r.status = isExchange? 'Exchanged' : isPlainReturn? 'Returned' : 'Refunded';
     r.authorizedBy = STATE.currentUser.fullName||STATE.currentUser.username; r.authorizedDate=now; r.updatedAt=now;
     await putRec('returns', r);
     await refreshAll();
@@ -6176,11 +6188,6 @@ function exportSalesCsv(){
 }
 
 /* ---------------- boot ---------------- */
-// Disables the browser's right-click menu across the whole app. Note: this is a deterrent
-// against casual right-clicking only — it does not hide or protect the underlying code, since
-// anyone can still view source (Ctrl+U), open DevTools (F12), or use the browser's own menu.
-// Client-side code is always visible to whoever loads the page; no script can change that.
-document.addEventListener('contextmenu', (e)=> e.preventDefault());
 init();
 </script>
 </body>
