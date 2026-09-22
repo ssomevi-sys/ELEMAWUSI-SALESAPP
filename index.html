@@ -5966,6 +5966,33 @@ function openImportFileModal(){
   byId('commitImportBtn').addEventListener('click', commitProductImport);
 }
 // Flexible header matching — accepts common variations of each column name.
+// Guesses a product's category from its name using keyword matching against this app's actual
+// category list. Order matters — more specific/collision-prone categories are checked before
+// broader ones (e.g. Nails before Electrical, since "wire nail" shouldn't match on "wire").
+const CATEGORY_KEYWORDS = [
+  ['Cement', ['cement','portland']],
+  ['Iron Rods & Reinforcement', ['iron rod','rebar','reinforcement bar','reinforcement','binding wire','iron bar','deformed bar','high yield bar']],
+  ['Blocks & Bricks', ['block','brick','kerb','paving stone','interlock']],
+  ['Roofing Sheets & Accessories', ['roofing sheet','roofing nail','ridge cap','gutter','aluzinc','iron sheet','roofing accessor']],
+  ['Timber & Wood Products', ['timber','plywood','mahogany','particle board','mdf board','plank','wood board','wawa','odum']],
+  ['Tiles', ['tile']],
+  ['Sand, Stone & Aggregates', ['aggregate','chippings','quarry dust','gravel',' sand',' stone']],
+  ['Nails, Screws & Fasteners', ['nail','screw','bolt','nut','washer','rivet','fastener']],
+  ['Plumbing Materials & Pipes', ['pipe','plumbing','tap','faucet','elbow joint','coupling','valve','water closet',' wc ','cistern','hose']],
+  ['Electrical Materials', ['cable','electrical','light switch','socket','bulb','conduit','circuit breaker','mcb','electrical tape','wire']],
+  ['Paints, Chemicals & Wood Treatment', ['paint','primer','emulsion','gloss','thinner','varnish','wood treatment','waterproof chemical','wood preservative']],
+  ['Adhesives & Sealants', ['adhesive','sealant','glue','silicone','mastic']],
+  ['Doors, Windows & Fittings', ['door','window','hinge','louvre','door handle','door lock']],
+  ['Aluminium & Glass Products', ['aluminium','aluminum','glass','mirror']],
+  ['Hardware & Tools', ['hammer','screwdriver','wrench','spanner','drill','hand saw','chisel','plier','padlock','tape measure','trowel','wheelbarrow','shovel','hardware']],
+];
+function guessCategory(name){
+  const n = ' ' + String(name||'').toLowerCase() + ' ';
+  for(const [cat, keywords] of CATEGORY_KEYWORDS){
+    if(keywords.some(kw=> n.includes(kw.toLowerCase()))) return cat;
+  }
+  return 'Other';
+}
 function findCol(headers, candidates){
   const norm = h => String(h||'').toLowerCase().replace(/[^a-z0-9]/g,'');
   const normHeaders = headers.map(norm);
@@ -5999,7 +6026,7 @@ async function parseProductsFromExcel(file){
     if(!name) continue;
     rows.push({
       name,
-      category: col.category>=0? String(r[col.category]||'').trim() : '',
+      category: (col.category>=0 && String(r[col.category]||'').trim()) ? String(r[col.category]).trim() : guessCategory(name),
       unit: col.unit>=0? String(r[col.unit]||'').trim() : '',
       sku: col.sku>=0? String(r[col.sku]||'').trim() : '',
       costPrice: col.cost>=0? (parseFloat(r[col.cost])||0) : 0,
@@ -6041,7 +6068,7 @@ async function parseProductsFromPdf(file){
     if(!name || name.length<2 || price<=0) continue;
     // Skip obvious non-product lines (headers/totals/page numbers).
     if(/^(page|total|subtotal|date|invoice|name|item|product)s?[:.]?$/i.test(name)) continue;
-    rows.push({name, category:'', unit:'', sku:'', costPrice:0, sellingPrice:price, stockQty:0});
+    rows.push({name, category: guessCategory(name), unit:'', sku:'', costPrice:0, sellingPrice:price, stockQty:0});
   }
   return rows;
 }
@@ -6061,7 +6088,7 @@ function renderImportReview(){
         <tr>
           <td><input type="checkbox" class="imp-chk" data-idx="${r.idx}" ${r.isDup?'':'checked'}></td>
           <td><input type="text" class="imp-name" data-idx="${r.idx}" value="${esc(r.name)}" style="width:160px"></td>
-          <td><input type="text" class="imp-category" data-idx="${r.idx}" value="${esc(r.category||'')}" placeholder="${esc(CATEGORIES[0])}" style="width:110px"></td>
+          <td><select class="imp-category" data-idx="${r.idx}" style="width:150px">${CATEGORIES.map(c=>`<option value="${esc(c)}" ${(r.category||'Other')===c?'selected':''}>${esc(c)}</option>`).join('')}</select></td>
           <td><input type="text" class="imp-unit" data-idx="${r.idx}" value="${esc(r.unit||'')}" placeholder="Piece" style="width:80px"></td>
           <td><input type="number" min="0" step="0.01" class="imp-cost" data-idx="${r.idx}" value="${r.costPrice}" style="width:80px"></td>
           <td><input type="number" min="0" step="0.01" class="imp-price" data-idx="${r.idx}" value="${r.sellingPrice}" style="width:80px"></td>
