@@ -15,6 +15,7 @@
 <!-- SheetJS: only used for the optional "Export to Excel" backup. Loaded from CDN, so that
      button needs an internet connection at least once; every other feature works fully offline. -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.6.347/pdf.min.js" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.12.3/JsBarcode.all.min.js" defer></script>
 <!-- Firebase (compat SDK — plain <script> tags, no bundler needed).
      This app stores its data in Firebase Firestore, so every device that opens it sees the
@@ -1444,6 +1445,7 @@ function renderInventory(){
           <button class="btn" id="conversionHistoryBtn">🔀 Conversion History</button>
           <button class="btn" id="importCatalogBtn">📥 Import Standard Catalog</button>
           <button class="btn" id="printAllBarcodesBtn">🏷️ Print Barcode Labels</button>
+          <button class="btn" id="importFileBtn">📤 Import from Excel/PDF</button>
           <button class="btn btn-primary" data-action="add-product">＋ Add Product</button>
         `:''}
         <button class="btn" id="toggleTrashBtn">${invShowTrash? '← Back to Inventory' : `🗑 Trash${trashCount?` (${trashCount})`:''}`}</button>
@@ -5714,6 +5716,7 @@ function wireTabEvents(){
   // Inventory
   const addBtn = v.querySelector('[data-action="add-product"]'); if(addBtn) addBtn.addEventListener('click', openAddProduct);
   const importCatalogBtn = byId('importCatalogBtn'); if(importCatalogBtn) importCatalogBtn.addEventListener('click', importStandardCatalog);
+  const importFileBtn = byId('importFileBtn'); if(importFileBtn) importFileBtn.addEventListener('click', openImportFileModal);
   const conversionHistoryBtn = byId('conversionHistoryBtn'); if(conversionHistoryBtn) conversionHistoryBtn.addEventListener('click', openConversionHistoryModal);
   v.querySelectorAll('[data-action="convert-units"]').forEach(b=>b.addEventListener('click', ()=>openConvertUnitsModal(b.dataset.id)));
   v.querySelectorAll('[data-action="edit-product"]').forEach(b=>b.addEventListener('click', ()=>openEditProduct(b.dataset.id)));
@@ -5928,6 +5931,185 @@ function wireTabEvents(){
   const clearBtn = byId('clearDataBtn'); if(clearBtn) clearBtn.addEventListener('click', clearAllData);
 }
 function renderInventoryPartial(){ byId('view').innerHTML = renderInventory(); wireTabEvents(); }
+/* ============================================================
+   BULK PRODUCT IMPORT FROM EXCEL / CSV / PDF
+   ============================================================ */
+let importDraftRows = [];
+function openImportFileModal(){
+  const body = `
+    <div class="help-box">Upload a product list as an Excel file (.xlsx), CSV, or PDF. Excel/CSV should have column headers like Name, Category, Unit, Cost Price, Selling Price, Stock — the app will match these flexibly even if worded slightly differently. PDF text extraction is best-effort (PDFs vary a lot in layout), so always review the results below before importing — nothing is added to Inventory until you click Import.</div>
+    <div class="field"><label>Choose File</label><input type="file" id="importFileInput" accept=".xlsx,.xls,.csv,.pdf"></div>
+    <div id="importReviewArea"></div>
+  `;
+  openModal('Import Products from Excel/PDF', body, `<button class="btn" data-action="closeModal">Close</button><button class="btn btn-primary" id="commitImportBtn" style="display:none">Import Selected</button>`, true);
+  importDraftRows = [];
+  byId('importFileInput').addEventListener('change', async (e)=>{
+    const file = e.target.files[0];
+    if(!file) return;
+    byId('importReviewArea').innerHTML = `<p class="hint">Reading file…</p>`;
+    try{
+      let rows;
+      const ext = file.name.split('.').pop().toLowerCase();
+      if(ext==='pdf') rows = await parseProductsFromPdf(file);
+      else rows = await parseProductsFromExcel(file);
+      if(rows.length===0){
+        byId('importReviewArea').innerHTML = `<p class="hint">Couldn't find any product rows in that file. For PDFs, this works best when each product is on its own line ending in a price. Try exporting as Excel/CSV instead if this keeps happening.</p>`;
+        return;
+      }
+      importDraftRows = rows;
+      renderImportReview();
+    }catch(err){
+      console.error('Import parse failed:', err);
+      byId('importReviewArea').innerHTML = `<p class="hint">Couldn't read that file — make sure it's a valid Excel, CSV, or PDF file.</p>`;
+    }
+  });
+  byId('commitImportBtn').addEventListener('click', commitProductImport);
+}
+// Flexible header matching — accepts common variations of each column name.
+function findCol(headers, candidates){
+  const norm = h => String(h||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+  const normHeaders = headers.map(norm);
+  for(const c of candidates){
+    const idx = normHeaders.indexOf(norm(c));
+    if(idx>=0) return idx;
+  }
+  return -1;
+}
+async function parseProductsFromExcel(file){
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, {type:'array'});
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  const grid = XLSX.utils.sheet_to_json(sheet, {header:1, defval:''});
+  if(grid.length<2) return [];
+  const headers = grid[0];
+  const col = {
+    name: findCol(headers, ['name','productname','product','item','itemname','description']),
+    category: findCol(headers, ['category','cat','type']),
+    unit: findCol(headers, ['unit','uom']),
+    sku: findCol(headers, ['sku','code','itemcode','barcode']),
+    cost: findCol(headers, ['costprice','cost','buyingprice','purchaseprice']),
+    price: findCol(headers, ['sellingprice','price','sellprice','unitprice']),
+    stock: findCol(headers, ['stock','stockqty','quantity','qty','opening stock','openingstock'])
+  };
+  if(col.name<0) return []; // can't proceed without at least a name column
+  const rows = [];
+  for(let i=1;i<grid.length;i++){
+    const r = grid[i];
+    const name = String(r[col.name]||'').trim();
+    if(!name) continue;
+    rows.push({
+      name,
+      category: col.category>=0? String(r[col.category]||'').trim() : '',
+      unit: col.unit>=0? String(r[col.unit]||'').trim() : '',
+      sku: col.sku>=0? String(r[col.sku]||'').trim() : '',
+      costPrice: col.cost>=0? (parseFloat(r[col.cost])||0) : 0,
+      sellingPrice: col.price>=0? (parseFloat(r[col.price])||0) : 0,
+      stockQty: col.stock>=0? (parseFloat(r[col.stock])||0) : 0
+    });
+  }
+  return rows;
+}
+// Best-effort: extracts text from every page, then treats each line that ends in a number as
+// "name ... price". PDFs vary enormously in layout, so this is intentionally simple — the
+// review table lets the user fix anything it gets wrong before importing.
+async function parseProductsFromPdf(file){
+  if(typeof pdfjsLib==='undefined'){ toast('PDF reader still loading — wait a second and try again','error'); return []; }
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.6.347/pdf.worker.min.js';
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({data:buf}).promise;
+  const lines = [];
+  for(let pageNum=1; pageNum<=pdf.numPages; pageNum++){
+    const page = await pdf.getPage(pageNum);
+    const content = await page.getTextContent();
+    // Group text items into lines by their vertical position on the page.
+    const byY = {};
+    content.items.forEach(it=>{
+      const y = Math.round(it.transform[5]);
+      (byY[y] = byY[y]||[]).push(it);
+    });
+    Object.keys(byY).sort((a,b)=>b-a).forEach(y=>{
+      const line = byY[y].sort((a,b)=>a.transform[4]-b.transform[4]).map(it=>it.str).join(' ').trim();
+      if(line) lines.push(line);
+    });
+  }
+  const rows = [];
+  for(const line of lines){
+    const match = line.match(/^(.*?\S)\s+([\d,]+\.?\d*)\s*$/);
+    if(!match) continue;
+    const name = match[1].trim();
+    const price = parseFloat(match[2].replace(/,/g,''))||0;
+    if(!name || name.length<2 || price<=0) continue;
+    // Skip obvious non-product lines (headers/totals/page numbers).
+    if(/^(page|total|subtotal|date|invoice|name|item|product)s?[:.]?$/i.test(name)) continue;
+    rows.push({name, category:'', unit:'', sku:'', costPrice:0, sellingPrice:price, stockQty:0});
+  }
+  return rows;
+}
+function renderImportReview(){
+  const existing = new Map(activeProducts().filter(inBranch).map(p=>[p.name.trim().toLowerCase(), p]));
+  const rows = importDraftRows.map((r,idx)=>{
+    const dup = existing.get(r.name.trim().toLowerCase());
+    return {...r, idx, isDup: !!dup};
+  });
+  const newCount = rows.filter(r=>!r.isDup).length;
+  byId('importReviewArea').innerHTML = `
+    <p class="hint" style="margin-top:12px">Found ${rows.length} row(s) — ${newCount} new, ${rows.length-newCount} already in inventory (unchecked automatically). Review and edit anything before importing.</p>
+    <div class="table-wrap" style="max-height:360px;overflow-y:auto">
+    <table>
+      <thead><tr><th></th><th>Name</th><th>Category</th><th>Unit</th><th class="right">Cost</th><th class="right">Price</th><th class="right">Stock</th><th>Status</th></tr></thead>
+      <tbody>${rows.map(r=>`
+        <tr>
+          <td><input type="checkbox" class="imp-chk" data-idx="${r.idx}" ${r.isDup?'':'checked'}></td>
+          <td><input type="text" class="imp-name" data-idx="${r.idx}" value="${esc(r.name)}" style="width:160px"></td>
+          <td><input type="text" class="imp-category" data-idx="${r.idx}" value="${esc(r.category||'')}" placeholder="${esc(CATEGORIES[0])}" style="width:110px"></td>
+          <td><input type="text" class="imp-unit" data-idx="${r.idx}" value="${esc(r.unit||'')}" placeholder="Piece" style="width:80px"></td>
+          <td><input type="number" min="0" step="0.01" class="imp-cost" data-idx="${r.idx}" value="${r.costPrice}" style="width:80px"></td>
+          <td><input type="number" min="0" step="0.01" class="imp-price" data-idx="${r.idx}" value="${r.sellingPrice}" style="width:80px"></td>
+          <td><input type="number" min="0" step="0.01" class="imp-stock" data-idx="${r.idx}" value="${r.stockQty}" style="width:80px"></td>
+          <td>${r.isDup? '<span class="badge badge-muted">Already exists</span>' : '<span class="badge badge-ok">New</span>'}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+    </div>
+  `;
+  byId('commitImportBtn').style.display = '';
+  document.querySelectorAll('.imp-name,.imp-category,.imp-unit,.imp-cost,.imp-price,.imp-stock').forEach(inp=>{
+    inp.addEventListener('input', (e)=>{
+      const idx = Number(e.target.dataset.idx);
+      const row = importDraftRows[idx];
+      if(!row) return;
+      if(e.target.classList.contains('imp-name')) row.name = e.target.value;
+      else if(e.target.classList.contains('imp-category')) row.category = e.target.value;
+      else if(e.target.classList.contains('imp-unit')) row.unit = e.target.value;
+      else if(e.target.classList.contains('imp-cost')) row.costPrice = parseFloat(e.target.value)||0;
+      else if(e.target.classList.contains('imp-price')) row.sellingPrice = parseFloat(e.target.value)||0;
+      else if(e.target.classList.contains('imp-stock')) row.stockQty = parseFloat(e.target.value)||0;
+    });
+  });
+}
+async function commitProductImport(){
+  const checked = Array.from(document.querySelectorAll('.imp-chk:checked')).map(c=>Number(c.dataset.idx));
+  if(checked.length===0){ toast('Select at least one row to import','error'); return; }
+  const now = new Date().toISOString();
+  let count = 0;
+  for(const idx of checked){
+    const r = importDraftRows[idx];
+    if(!r || !r.name.trim()) continue;
+    await putRec('products', {
+      name: r.name.trim(),
+      category: r.category?.trim() || CATEGORIES[0],
+      unit: (r.unit?.trim() && allUnits().some(u=>u.toLowerCase()===r.unit.trim().toLowerCase())) ? r.unit.trim() : allUnits()[0],
+      sku: r.sku||'', dimensions:'', costPrice: r.costPrice||0, sellingPrice: r.sellingPrice||0,
+      stockQty: r.stockQty||0, reorderLevel:5, notes:'', altUnits:[],
+      branch: STATE.currentBranch, createdAt: now, updatedAt: now
+    });
+    count++;
+  }
+  await refreshAll();
+  closeModal();
+  toast(`Imported ${count} product(s) into ${branchName(STATE.currentBranch)}'s inventory`);
+  render();
+}
 async function importStandardCatalog(){
   const existingNames = new Set(activeProducts().filter(inBranch).map(p=>p.name.trim().toLowerCase()));
   const toAdd = STANDARD_CATALOG.filter(it=>!existingNames.has(it.name.trim().toLowerCase()));
