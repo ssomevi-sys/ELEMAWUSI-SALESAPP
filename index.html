@@ -27,29 +27,32 @@
 <style>
 /* ============ DESIGN TOKENS ============ */
 :root{
-  --bg:#EEF1F2;
+  --bg:#EEF6F5;
   --surface:#FFFFFF;
-  --surface-2:#F7F8F9;
-  --sidebar:#141B24;
-  --sidebar-2:#1D2733;
-  --ink:#161C22;
-  --ink-soft:#5B6672;
-  --ink-faint:#8A939C;
-  --border:#DCE1E4;
-  --border-soft:#EAEDEF;
-  --primary:#2F6690;
-  --primary-dark:#204A69;
-  --primary-light:#E7F0F6;
-  --aluminium:#AEB6BD;
-  --aluminium-dark:#7C858C;
-  --success:#25795A;
-  --success-bg:#E5F3ED;
+  --surface-2:#F5FBF7;
+  --sidebar:#0A2E33;
+  --sidebar-2:#123F46;
+  --ink:#14232A;
+  --ink-soft:#54666B;
+  --ink-faint:#87999C;
+  --border:#D7E9E6;
+  --border-soft:#E9F4F1;
+  --primary:#06AED4;
+  --primary-dark:#04869F;
+  --primary-light:#E1F7FB;
+  --aluminium:#9FD3D8;
+  --aluminium-dark:#5FA0A6;
+  --success:#6B9E00;
+  --success-bg:#F2FAD6;
   --warning:#A9670D;
   --warning-bg:#FBF1DD;
   --danger:#B23A3A;
   --danger-bg:#FBEAEA;
-  --hover-green:#DFF5E4;
-  --hover-green-border:#8FD9A8;
+  --hover-green:#F1F8D2;
+  --hover-green-border:#C3DE5C;
+  --pink:#E5177C;
+  --pink-dark:#A80F5A;
+  --pink-light:#FDE3F0;
   --radius:10px;
   --radius-sm:6px;
   --shadow:0 1px 2px rgba(20,27,36,.06), 0 6px 20px -8px rgba(20,27,36,.12);
@@ -75,12 +78,10 @@ a{touch-action:manipulation;}
 :focus-visible{outline:2px solid var(--primary);outline-offset:1px;}
 a{color:var(--primary);}
 
-/* brushed aluminium signature strip */
+/* signature colour strip — lemon green / pink / cyan */
 .brushed{
   background:linear-gradient(115deg,
-    #B9C1C7 0%, #DDE2E5 8%, #9AA3AA 16%, #C7CDD2 24%, #8E979E 32%,
-    #D7DCDF 42%, #A3ACB3 52%, #C3C9CD 62%, #949CA3 72%, #D2D7DA 82%,
-    #A9B1B7 92%, #C6CCD0 100%);
+    #C6E82B 0%, #06AED4 26%, #E5177C 52%, #06AED4 78%, #C6E82B 100%);
   background-size:200% 100%;
 }
 
@@ -105,8 +106,8 @@ nav.mainnav{flex:1;padding:14px 10px;overflow-y:auto;-webkit-overflow-scrolling:
 .branch-switch{display:flex;flex-direction:column;gap:6px;}
 .branch-btn{display:flex;align-items:center;gap:8px;width:100%;padding:9px 10px;border:1px solid rgba(255,255,255,.12);
   background:var(--sidebar-2);color:#C9D0D6;border-radius:var(--radius-sm);font-size:12.5px;font-weight:600;text-align:left;transition:background .12s,border-color .12s;}
-.branch-btn:hover{background:#26313E;}
-.branch-btn.active{background:var(--primary);border-color:var(--primary);color:#fff;}
+.branch-btn:hover{background:#1A4E56;}
+.branch-btn.active{background:var(--pink);border-color:var(--pink);color:#fff;}
 .branch-btn .dot{width:7px;height:7px;border-radius:50%;background:currentColor;opacity:.6;flex:0 0 7px;}
 .branch-locked-label{padding:9px 10px;border:1px solid rgba(255,255,255,.12);background:var(--sidebar-2);color:#C9D0D6;border-radius:var(--radius-sm);font-size:12.5px;font-weight:600;}
 .branch-btn.active .dot{opacity:1;}
@@ -209,7 +210,7 @@ tbody tr:hover{background:var(--surface-2);}
 .badge-warn{background:var(--warning-bg);color:var(--warning);}
 .badge-bad{background:var(--danger-bg);color:var(--danger);}
 .badge-muted{background:var(--surface-2);color:var(--ink-soft);border:1px solid var(--border);}
-.badge-info{background:var(--primary-light);color:var(--primary-dark);}
+.badge-info{background:var(--pink-light);color:var(--pink-dark);}
 .badge-display{padding:8px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13.5px;font-weight:700;font-family:var(--font-mono);}
 .prod-search-wrap{position:relative;}
 .prod-search-list{position:absolute;top:calc(100% + 2px);left:0;right:0;z-index:60;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);max-height:230px;overflow-y:auto;-webkit-overflow-scrolling:touch;box-shadow:var(--shadow);display:none;}
@@ -250,8 +251,8 @@ tbody tr:hover{background:var(--surface-2);}
 .stock-bar>span{display:block;height:100%;background:var(--success);}
 .stock-bar.low>span{background:var(--danger);}
 
-.help-box{background:var(--primary-light);border:1px solid #CFE0EA;border-radius:var(--radius-sm);padding:12px 14px;font-size:12.5px;color:var(--primary-dark);margin-bottom:14px;}
-.applied-chip{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--success-bg);color:var(--success);border:1px solid #CFE0DA;border-radius:var(--radius-sm);padding:8px 12px;font-size:13px;font-weight:600;}
+.help-box{background:var(--primary-light);border:1px solid #BCEAF2;border-radius:var(--radius-sm);padding:12px 14px;font-size:12.5px;color:var(--primary-dark);margin-bottom:14px;}
+.applied-chip{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--success-bg);color:var(--success);border:1px solid #DCEBA8;border-radius:var(--radius-sm);padding:8px 12px;font-size:13px;font-weight:600;}
 .danger-zone{border:1px solid #EFC9C9;background:var(--danger-bg);border-radius:var(--radius);padding:16px;}
 
 /* invoice / print */
@@ -322,7 +323,7 @@ tbody tr:hover{background:var(--surface-2);}
 /* user chip / topbar */
 .user-chip{display:flex;align-items:center;gap:8px;padding:5px 10px 5px 6px;border:1px solid var(--border);border-radius:999px;background:var(--surface);cursor:pointer;}
 .user-chip:hover{background:var(--surface-2);}
-.user-avatar{width:24px;height:24px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;font-family:var(--font-display);}
+.user-avatar{width:24px;height:24px;border-radius:50%;background:var(--pink);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;font-family:var(--font-display);}
 .user-chip .uname{font-size:12.5px;font-weight:600;}
 .user-chip .urole{font-size:10px;color:var(--ink-faint);text-transform:uppercase;}
 
@@ -807,7 +808,7 @@ async function init(){
     window.addEventListener('online', updateOnlineStatus);
     window.addEventListener('offline', updateOnlineStatus);
 
-    const savedUser = localStorage.getItem(SESSION_KEY);
+    const savedUser = sessionStorage.getItem(SESSION_KEY);
     const match = savedUser ? STATE.users.find(u=>u.username===savedUser && u.active!==false) : null;
     if(match){
       const matchBranch = match.branch||'main';
@@ -929,7 +930,10 @@ async function doLogin(){
     STATE.currentBranch = effectiveBranch;
     localStorage.setItem(BRANCH_KEY, effectiveBranch);
     STATE.currentUser = {username:user.username, fullName:user.fullName, role:user.role, branch:userBranch, isSuperAdmin};
-    localStorage.setItem(SESSION_KEY, user.username);
+    // Session token lives in sessionStorage (not localStorage): it survives a page refresh
+    // within the same tab/app session, but is cleared as soon as the tab/app is closed —
+    // so a brand-new session always demands the password again, instead of logging in forever.
+    sessionStorage.setItem(SESSION_KEY, user.username);
     enterApp();
     resetInactivityTimer();
     await logActivity('Login', 'Signed in');
@@ -948,7 +952,7 @@ function doLogout(){
   if(STATE.currentUser) logActivity('Logout', 'Signed out');
   clearTimeout(inactivityTimer);
   STATE.currentUser = null;
-  localStorage.removeItem(SESSION_KEY);
+  sessionStorage.removeItem(SESSION_KEY);
   closeSidebar();
   showLogin();
 }
@@ -1124,13 +1128,16 @@ const NAV_ITEMS = [
   {tab:'activity', label:'Activity Log', icon:'M12 8v4l3 3M12 2a10 10 0 100 20 10 10 0 000-20z', adminOnly:true},
   {tab:'expenditure', label:'Expenditure', icon:'M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6', adminOnly:true},
   {tab:'users', label:'Users', icon:'M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75', adminOnly:true},
-  {tab:'settings', label:'Settings', icon:'M12 15a3 3 0 100-6 3 3 0 000 6z M19.4 15a1.7 1.7 0 00.34 1.87l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.7 1.7 0 00-1.87-.34 1.7 1.7 0 00-1 1.56V21a2 2 0 11-4 0v-.09a1.7 1.7 0 00-1-1.55 1.7 1.7 0 00-1.87.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.7 1.7 0 00.33-1.87 1.7 1.7 0 00-1.55-1H3a2 2 0 110-4h.09a1.7 1.7 0 001.55-1 1.7 1.7 0 00-.33-1.87l-.06-.06a2 2 0 112.83-2.83l.06.06a1.7 1.7 0 001.87.33H9a1.7 1.7 0 001-1.55V3a2 2 0 114 0v.09a1.7 1.7 0 001 1.55 1.7 1.7 0 001.87-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.7 1.7 0 00-.34 1.87V9a1.7 1.7 0 001.56 1H21a2 2 0 110 4h-.09a1.7 1.7 0 00-1.51 1z', adminOnly:true, superAdminOnly:true},
+  {tab:'settings', label:'Settings', icon:'M12 15a3 3 0 100-6 3 3 0 000 6z M19.4 15a1.7 1.7 0 00.34 1.87l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.7 1.7 0 00-1.87-.34 1.7 1.7 0 00-1 1.56V21a2 2 0 11-4 0v-.09a1.7 1.7 0 00-1-1.55 1.7 1.7 0 00-1.87.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.7 1.7 0 00.33-1.87 1.7 1.7 0 00-1.55-1H3a2 2 0 110-4h.09a1.7 1.7 0 001.55-1 1.7 1.7 0 00-.33-1.87l-.06-.06a2 2 0 112.83-2.83l.06.06a1.7 1.7 0 001.87.33H9a1.7 1.7 0 001-1.55V3a2 2 0 114 0v.09a1.7 1.7 0 001 1.55 1.7 1.7 0 001.87-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.7 1.7 0 00-.34 1.87V9a1.7 1.7 0 001.56 1H21a2 2 0 110 4h-.09a1.7 1.7 0 00-1.51 1z'},
+  // NOTE: Settings has no adminOnly/superAdminOnly flag — every role (including sales reps) can
+  // open it, because everyone needs the Printer & Barcode Scanner panel. renderSettings() itself
+  // hides every other panel (company info, backup, danger zone, etc.) unless isSuperAdmin.
 ];
 function visibleNavItems(){
   if(!STATE.currentUser) return [];
   if(STATE.currentUser.isSuperAdmin) return NAV_ITEMS;
   if(STATE.currentUser.role==='admin') return NAV_ITEMS.filter(n=> !n.superAdminOnly);
-  return NAV_ITEMS.filter(n=> n.tab==='sales' || n.tab==='deposits' || n.tab==='credit' || n.tab==='transfers');
+  return NAV_ITEMS.filter(n=> n.tab==='sales' || n.tab==='deposits' || n.tab==='credit' || n.tab==='transfers' || n.tab==='settings');
 }
 function renderBranchSwitcher(){
   const box = byId('branchSwitcher');
@@ -1180,8 +1187,8 @@ function closeSidebar(){ byId('sidebar').classList.remove('open'); byId('scrim')
 
 const TITLES = {dashboard:'Dashboard', overview:'Combined Overview', inventory:'Inventory', supplies:'Purchases', transfers:'Stock Transfers', sales:'Sales', deposits:'Customer Deposits', credit:'Customer Credit', pricing:'Price Management', reports:'Reports', activity:'Activity Log', expenditure:'Expenditure', settings:'Settings', users:'Users'};
 function navigate(tab){
-  if(STATE.currentUser && STATE.currentUser.role==='sales_rep' && tab!=='sales' && tab!=='deposits' && tab!=='credit' && tab!=='transfers') tab='sales';
-  if(STATE.currentUser && STATE.currentUser.role==='admin' && !STATE.currentUser.isSuperAdmin && (tab==='settings' || tab==='overview')) tab='dashboard';
+  if(STATE.currentUser && STATE.currentUser.role==='sales_rep' && tab!=='sales' && tab!=='deposits' && tab!=='credit' && tab!=='transfers' && tab!=='settings') tab='sales';
+  if(STATE.currentUser && STATE.currentUser.role==='admin' && !STATE.currentUser.isSuperAdmin && tab==='overview') tab='dashboard';
   STATE.tab = tab;
   if(tab==='sales') STATE.salesSubView='list';
   if(tab==='supplies') STATE.suppliesSubView='list';
@@ -5488,35 +5495,9 @@ function resizeImageToDataUrl(file, maxW, maxH, quality){
 }
 function renderSettings(){
   const s = STATE.settings;
-  return `
-    <div class="panel">
-      <div class="panel-head"><h3>Company Information</h3></div>
-      <div class="panel-body">
-        <div class="field-row">
-          <div class="field"><label>Company Name</label><input type="text" id="set_name" value="${esc(s.companyName)}"></div>
-          <div class="field"><label>Currency Symbol</label><input type="text" id="set_currency" value="${esc(s.currencySymbol)}"></div>
-        </div>
-        <div class="field-row">
-          <div class="field"><label>Phone</label><input type="tel" id="set_phone" value="${esc(s.phone)}"></div>
-          <div class="field"><label>Email</label><input type="email" id="set_email" value="${esc(s.email)}"></div>
-        </div>
-        <div class="field"><label>Address</label><input type="text" id="set_address" value="${esc(s.address)}"></div>
-        <div class="field-row">
-          <div class="field"><label>Default Tax / VAT Rate (%)</label><input type="number" min="0" step="0.01" id="set_tax" value="${s.taxRate}"></div>
-          <div class="field"><label>Invoice Number Prefix</label><input type="text" id="set_prefix" value="${esc(s.invoicePrefix)}"></div>
-        </div>
-        <div class="field">
-          <label>Company Logo <span class="hint" style="font-weight:400">Appears at the top of printed receipts and invoices.</span></label>
-          <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-            ${s.logoDataUrl? `<img src="${s.logoDataUrl}" alt="Company logo" style="max-height:60px;max-width:160px;border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px;background:#fff">` : `<span class="hint">No logo uploaded yet</span>`}
-            <input type="file" id="set_logo_file" accept="image/*" style="max-width:220px">
-            ${s.logoDataUrl? `<button class="btn btn-sm" id="removeLogoBtn">Remove Logo</button>` : ''}
-          </div>
-        </div>
-        <button class="btn btn-primary" id="saveSettingsBtn">Save Settings</button>
-      </div>
-    </div>
+  const isSuper = !!STATE.currentUser?.isSuperAdmin;
 
+  const printerScannerPanel = `
     <div class="panel">
       <div class="panel-head"><h3>Printer &amp; Barcode Scanner</h3></div>
       <div class="panel-body">
@@ -5553,7 +5534,48 @@ function renderSettings(){
           </div>
         </div>
       </div>
+    </div>`;
+
+  // Every signed-in user (sales reps and branch admins included) can reach Settings, but only
+  // to connect their own printer/scanner. Everything below this point — company info, backup,
+  // danger zone, about — is restricted to the Main Shop administrator only.
+  if(!isSuper){
+    return `
+      <div class="help-box">You can connect a receipt printer and barcode scanner here. Other settings are managed by the Main Shop administrator.</div>
+      ${printerScannerPanel}
+    `;
+  }
+
+  return `
+    <div class="panel">
+      <div class="panel-head"><h3>Company Information</h3></div>
+      <div class="panel-body">
+        <div class="field-row">
+          <div class="field"><label>Company Name</label><input type="text" id="set_name" value="${esc(s.companyName)}"></div>
+          <div class="field"><label>Currency Symbol</label><input type="text" id="set_currency" value="${esc(s.currencySymbol)}"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Phone</label><input type="tel" id="set_phone" value="${esc(s.phone)}"></div>
+          <div class="field"><label>Email</label><input type="email" id="set_email" value="${esc(s.email)}"></div>
+        </div>
+        <div class="field"><label>Address</label><input type="text" id="set_address" value="${esc(s.address)}"></div>
+        <div class="field-row">
+          <div class="field"><label>Default Tax / VAT Rate (%)</label><input type="number" min="0" step="0.01" id="set_tax" value="${s.taxRate}"></div>
+          <div class="field"><label>Invoice Number Prefix</label><input type="text" id="set_prefix" value="${esc(s.invoicePrefix)}"></div>
+        </div>
+        <div class="field">
+          <label>Company Logo <span class="hint" style="font-weight:400">Appears at the top of printed receipts and invoices.</span></label>
+          <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+            ${s.logoDataUrl? `<img src="${s.logoDataUrl}" alt="Company logo" style="max-height:60px;max-width:160px;border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px;background:#fff">` : `<span class="hint">No logo uploaded yet</span>`}
+            <input type="file" id="set_logo_file" accept="image/*" style="max-width:220px">
+            ${s.logoDataUrl? `<button class="btn btn-sm" id="removeLogoBtn">Remove Logo</button>` : ''}
+          </div>
+        </div>
+        <button class="btn btn-primary" id="saveSettingsBtn">Save Settings</button>
+      </div>
     </div>
+
+    ${printerScannerPanel}
 
     <div class="panel">
       <div class="panel-head"><h3>Data Backup &amp; Restore</h3></div>
