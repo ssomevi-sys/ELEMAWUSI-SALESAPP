@@ -445,6 +445,12 @@ function unitOptionsHtml(selected, opts){
 function canManageUnits(){
   return STATE.currentUser && (STATE.currentUser.role==='super_admin' || STATE.currentUser.role==='admin');
 }
+// Adding new products (one at a time, from a standard catalog, or from an Excel/PDF import)
+// is restricted to administrators — the Main Shop admin and the ELEMAWUSI ANNEX admin.
+// Sales reps can view, search and use inventory, but cannot create new products.
+function canAddProduct(){
+  return !!(STATE.currentUser && STATE.currentUser.role==='admin');
+}
 // Wires any unit <select> so picking "Add new unit…" prompts for a name, saves it to settings,
 // and immediately selects it. Safe to call on a container holding several unit selects.
 function wireUnitSelects(container){
@@ -505,7 +511,7 @@ const BRANCH_KEY = "elemawusi_session_branch";
       so only logged-in staff can read/write your data.
 --------------------------------------------------- */
 const firebaseConfig = {
-  apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
+ apiKey: "AIzaSyDGxajwVwjSwWpqdC7BiSbkPK536go8kSA",
   authDomain: "elemawusiventuresapp.firebaseapp.com",
   databaseURL: "https://elemawusiventuresapp-default-rtdb.firebaseio.com",
   projectId: "elemawusiventuresapp",
@@ -1137,7 +1143,7 @@ function visibleNavItems(){
   if(!STATE.currentUser) return [];
   if(STATE.currentUser.isSuperAdmin) return NAV_ITEMS;
   if(STATE.currentUser.role==='admin') return NAV_ITEMS.filter(n=> !n.superAdminOnly);
-  return NAV_ITEMS.filter(n=> n.tab==='sales' || n.tab==='deposits' || n.tab==='credit' || n.tab==='transfers' || n.tab==='settings');
+  return NAV_ITEMS.filter(n=> n.tab==='sales' || n.tab==='deposits' || n.tab==='credit' || n.tab==='transfers' || n.tab==='settings' || n.tab==='inventory');
 }
 function renderBranchSwitcher(){
   const box = byId('branchSwitcher');
@@ -1187,7 +1193,7 @@ function closeSidebar(){ byId('sidebar').classList.remove('open'); byId('scrim')
 
 const TITLES = {dashboard:'Dashboard', overview:'Combined Overview', inventory:'Inventory', supplies:'Purchases', transfers:'Stock Transfers', sales:'Sales', deposits:'Customer Deposits', credit:'Customer Credit', pricing:'Price Management', reports:'Reports', activity:'Activity Log', expenditure:'Expenditure', settings:'Settings', users:'Users'};
 function navigate(tab){
-  if(STATE.currentUser && STATE.currentUser.role==='sales_rep' && tab!=='sales' && tab!=='deposits' && tab!=='credit' && tab!=='transfers' && tab!=='settings') tab='sales';
+  if(STATE.currentUser && STATE.currentUser.role==='sales_rep' && tab!=='sales' && tab!=='deposits' && tab!=='credit' && tab!=='transfers' && tab!=='settings' && tab!=='inventory') tab='sales';
   if(STATE.currentUser && STATE.currentUser.role==='admin' && !STATE.currentUser.isSuperAdmin && tab==='overview') tab='dashboard';
   STATE.tab = tab;
   if(tab==='sales') STATE.salesSubView='list';
@@ -1450,10 +1456,12 @@ function renderInventory(){
         <span style="flex:1"></span>
         ${!invShowTrash? `
           <button class="btn" id="conversionHistoryBtn">🔀 Conversion History</button>
-          <button class="btn" id="importCatalogBtn">📥 Import Standard Catalog</button>
+          ${canAddProduct()? `
+            <button class="btn" id="importCatalogBtn">📥 Import Standard Catalog</button>
+            <button class="btn" id="importFileBtn">📤 Import from Excel/PDF</button>
+          `:''}
           <button class="btn" id="printAllBarcodesBtn">🏷️ Print Barcode Labels</button>
-          <button class="btn" id="importFileBtn">📤 Import from Excel/PDF</button>
-          <button class="btn btn-primary" data-action="add-product">＋ Add Product</button>
+          ${canAddProduct()? `<button class="btn btn-primary" data-action="add-product">＋ Add Product</button>`:''}
         `:''}
         <button class="btn" id="toggleTrashBtn">${invShowTrash? '← Back to Inventory' : `🗑 Trash${trashCount?` (${trashCount})`:''}`}</button>
       </div>
@@ -1723,6 +1731,7 @@ function renderBarcodePreview(value){
   catch(e){ console.error('Barcode render failed', e); }
 }
 function openAddProduct(){
+  if(!canAddProduct()){ toast('Only an administrator can add products','error'); return; }
   openModal('Add Product', productFormHtml(null),
     `<button class="btn" data-action="closeModal">Cancel</button><button class="btn btn-primary" id="saveProductBtn">Save Product</button>`);
   wireAltUnitsEvents();
@@ -1739,6 +1748,7 @@ function openEditProduct(id){
   byId('saveProductBtn').addEventListener('click', ()=>saveProduct(p));
 }
 async function saveProduct(existing){
+  if(!existing && !canAddProduct()){ toast('Only an administrator can add products','error'); return; }
   const name = byId('f_name').value.trim();
   const category = byId('f_category').value;
   const unit = byId('f_unit').value;
@@ -5958,6 +5968,7 @@ function renderInventoryPartial(){ byId('view').innerHTML = renderInventory(); w
    ============================================================ */
 let importDraftRows = [];
 function openImportFileModal(){
+  if(!canAddProduct()){ toast('Only an administrator can add products','error'); return; }
   const body = `
     <div class="help-box">Upload a product list as an Excel file (.xlsx), CSV, or PDF. Excel/CSV should have column headers like Name, Category, Unit, Cost Price, Selling Price, Stock — the app will match these flexibly even if worded slightly differently. PDF text extraction is best-effort (PDFs vary a lot in layout), so always review the results below before importing — nothing is added to Inventory until you click Import.</div>
     <div class="field"><label>Choose File</label><input type="file" id="importFileInput" accept=".xlsx,.xls,.csv,.pdf"></div>
@@ -6160,6 +6171,7 @@ async function commitProductImport(){
   render();
 }
 async function importStandardCatalog(){
+  if(!canAddProduct()){ toast('Only an administrator can add products','error'); return; }
   const existingNames = new Set(activeProducts().filter(inBranch).map(p=>p.name.trim().toLowerCase()));
   const toAdd = STANDARD_CATALOG.filter(it=>!existingNames.has(it.name.trim().toLowerCase()));
   if(toAdd.length===0){ toast("All standard catalog items are already in this shop's inventory"); return; }
