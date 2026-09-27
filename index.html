@@ -451,6 +451,12 @@ function canManageUnits(){
 function canAddProduct(){
   return !!(STATE.currentUser && STATE.currentUser.role==='admin');
 }
+// Adjusting stock quantities, editing product details, and deleting products
+// are also restricted to administrators. Sales reps can view and use inventory
+// (e.g. search it while making a sale) but cannot alter it.
+function canManageStock(){
+  return !!(STATE.currentUser && STATE.currentUser.role==='admin');
+}
 // Wires any unit <select> so picking "Add new unit…" prompts for a name, saves it to settings,
 // and immediately selects it. Safe to call on a container holding several unit selects.
 function wireUnitSelects(container){
@@ -1509,10 +1515,10 @@ function renderInventory(){
                 <button class="icon-btn" title="Delete Permanently" data-action="purge-product" data-id="${p.id}">${iconTrash()}</button>
               ` : `
                 <button class="icon-btn" title="Print Barcode Label" data-action="print-barcode" data-id="${p.id}">🏷️</button>
-                <button class="icon-btn" title="Adjust Stock" data-action="adjust-stock" data-id="${p.id}">${iconBox()}</button>
+                ${canManageStock()? `<button class="icon-btn" title="Adjust Stock" data-action="adjust-stock" data-id="${p.id}">${iconBox()}</button>` : ''}
                 <button class="icon-btn" title="Convert Units (e.g. break bulk into smaller units)" data-action="convert-units" data-id="${p.id}">${iconConvert()}</button>
-                <button class="icon-btn" title="Edit" data-action="edit-product" data-id="${p.id}">${iconEdit()}</button>
-                <button class="icon-btn" title="Delete" data-action="delete-product" data-id="${p.id}">${iconTrash()}</button>
+                ${canManageStock()? `<button class="icon-btn" title="Edit" data-action="edit-product" data-id="${p.id}">${iconEdit()}</button>` : ''}
+                ${canManageStock()? `<button class="icon-btn" title="Delete" data-action="delete-product" data-id="${p.id}">${iconTrash()}</button>` : ''}
               `}
             </td>
           </tr>`;
@@ -1754,6 +1760,7 @@ function openAddProduct(){
   byId('saveProductBtn').addEventListener('click', ()=>saveProduct(null));
 }
 function openEditProduct(id){
+  if(!canManageStock()){ toast('Only administrators can edit products'); return; }
   const p = STATE.products.find(x=>x.id==id); if(!p) return;
   openModal('Edit Product', productFormHtml(p),
     `<button class="btn" data-action="closeModal">Cancel</button><button class="btn btn-primary" id="saveProductBtn">Save Changes</button>`);
@@ -1807,6 +1814,7 @@ async function saveProduct(existing){
   render();
 }
 async function deleteProduct(id){
+  if(!canManageStock()){ toast('Only administrators can delete products'); return; }
   const p = STATE.products.find(x=>x.id==id); if(!p) return;
   confirmDialog(`Move "${p.name}" to Trash? It'll disappear from Inventory and Sales, but you can restore it later — nothing is permanently lost.`, async ()=>{
     p.deletedAt = new Date().toISOString();
@@ -1839,6 +1847,7 @@ function purgeProduct(id){
   });
 }
 function openAdjustStock(id){
+  if(!canManageStock()){ toast('Only administrators can adjust stock'); return; }
   const p = STATE.products.find(x=>x.id==id); if(!p) return;
   const body = `
     <div class="help-box">Current stock: <b>${fmtNum(p.stockQty)} ${esc(p.unit)}</b></div>
