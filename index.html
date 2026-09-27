@@ -50,8 +50,8 @@
   --danger-bg:#FBEAEA;
   --hover-green:#F1F8D2;
   --hover-green-border:#C3DE5C;
-  --pink:#E5177C;
-  --pink-dark:#A80F5A;
+  --pink:#4e1732;
+  --pink-dark:#662042;
   --pink-light:#FDE3F0;
   --radius:10px;
   --radius-sm:6px;
@@ -215,7 +215,7 @@ tbody tr:hover{background:var(--surface-2);}
 .prod-search-wrap{position:relative;}
 .prod-search-list{position:absolute;top:calc(100% + 2px);left:0;right:0;z-index:60;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);max-height:230px;overflow-y:auto;-webkit-overflow-scrolling:touch;box-shadow:var(--shadow);display:none;}
 .prod-search-list.show{display:block;}
-.prod-search-item{padding:8px 10px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border-soft);}
+.prod-search-item{padding:11px 12px;min-height:20px;cursor:pointer;font-size:13.5px;line-height:1.4;border-bottom:1px solid var(--border-soft);}
 .prod-search-item:last-child{border-bottom:none;}
 .prod-search-item:hover,.prod-search-item.active{background:var(--primary-light);}
 .prod-search-empty{padding:8px 10px;color:var(--ink-faint);font-size:12.5px;}
@@ -804,6 +804,12 @@ async function init(){
   // will show up in the login box instead of the button silently doing nothing.
   bindAuthEvents();
   bindGlobalEvents();
+  // Read the session token before anything else that could throw, and wrap it in try/catch:
+  // some browsers (private/incognito mode, certain embedded webviews) block sessionStorage
+  // entirely and throw on access rather than just returning null. Either way, a saved token
+  // read here is what lets a page refresh skip the login screen further down.
+  let savedUser = null;
+  try{ savedUser = sessionStorage.getItem(SESSION_KEY); }catch(e){ console.warn('sessionStorage unavailable:', e); }
   try{
     await openDB();
     await ensureSettings();
@@ -814,7 +820,6 @@ async function init(){
     window.addEventListener('online', updateOnlineStatus);
     window.addEventListener('offline', updateOnlineStatus);
 
-    const savedUser = sessionStorage.getItem(SESSION_KEY);
     const match = savedUser ? STATE.users.find(u=>u.username===savedUser && u.active!==false) : null;
     if(match){
       const matchBranch = match.branch||'main';
@@ -828,13 +833,23 @@ async function init(){
       }
       enterApp();
     } else {
+      // A leftover token that no longer matches a real, active user (deleted/deactivated
+      // account) is worthless — clear it so the login screen doesn't try it again later.
+      if(savedUser){ try{ sessionStorage.removeItem(SESSION_KEY); }catch(e){} }
       showLogin();
     }
   }catch(err){
     console.error('Startup error:', err);
     showLogin();
     const errBox = byId('loginError');
-    errBox.textContent = 'Could not connect to the database. Check your internet connection and that the Firebase config near the top of this file is filled in correctly, then reload the page.';
+    if(savedUser){
+      // The user was already signed in and just refreshed — this is a real connection
+      // problem (not a normal logout), so say so plainly and offer a retry instead of
+      // silently discarding their session token.
+      errBox.textContent = `You were signed in as "${savedUser}" — could not reconnect to the database to restore your session. Check your connection and reload the page; your session is still saved.`;
+    } else {
+      errBox.textContent = 'Could not connect to the database. Check your internet connection and that the Firebase config near the top of this file is filled in correctly, then reload the page.';
+    }
     errBox.classList.add('show');
   }
 }
@@ -3379,22 +3394,45 @@ function wireProductSearch(container, onSelect){
     list.classList.remove('show'); list.innerHTML='';
     onSelect(rowId, item.dataset.id);
   };
-  // Selection happens here (on press-down) rather than waiting for 'click', because on some
-  // mobile browsers preventDefault() on touchstart stops the browser from ever firing the
-  // follow-up synthetic click — which used to make tapping a product silently do nothing.
-  // closeOtherLists is only invoked when the press ISN'T on an item (i.e. the user pressed
-  // directly into a different field) — calling it before handling an actual item-press risked
-  // interfering with that very row's own list/input, which is what caused a crash.
+  // Selection on mouse happens on press-down (mousedown) rather than waiting for 'click', so
+  // desktop users get an instantly-responsive picker.
   container.addEventListener('mousedown', (e)=>{
     const item = e.target.closest('.prod-search-item');
     if(item){ e.preventDefault(); selectItem(item); return; }
     closeOtherLists(e.target.closest('.prod-search-wrap'));
   });
+  // Touch is handled separately from mouse, and deliberately does NOT select on touchstart.
+  // Selecting the instant a finger lands used to make the list "trigger-happy": a sales rep
+  // trying to scroll down to a different product would have their finger land on whatever
+  // item happened to be under it first, and that item got selected before the scroll gesture
+  // even started — picking the wrong product. Instead we track the touch and only treat it as
+  // a real tap (and select) if the finger didn't move more than a few pixels before lifting;
+  // any noticeable movement is treated as scrolling and cancels the pending selection.
+  const TAP_MOVE_THRESHOLD = 10; // px
+  let touchState = null; // {item, startX, startY, moved}
   container.addEventListener('touchstart', (e)=>{
     const item = e.target.closest('.prod-search-item');
-    if(item){ e.preventDefault(); selectItem(item); return; }
-    closeOtherLists(e.target.closest('.prod-search-wrap'));
+    if(!item){ closeOtherLists(e.target.closest('.prod-search-wrap')); touchState = null; return; }
+    const t = e.touches[0];
+    touchState = {item, startX:t.clientX, startY:t.clientY, moved:false};
+    // No preventDefault here: leave the browser free to start a scroll if the finger moves.
+  }, {passive:true});
+  container.addEventListener('touchmove', (e)=>{
+    if(!touchState) return;
+    const t = e.touches[0];
+    if(Math.abs(t.clientX-touchState.startX) > TAP_MOVE_THRESHOLD || Math.abs(t.clientY-touchState.startY) > TAP_MOVE_THRESHOLD){
+      touchState.moved = true; // this is a scroll/drag, not a tap — don't select on release
+    }
+  }, {passive:true});
+  container.addEventListener('touchend', (e)=>{
+    if(!touchState) return;
+    const {item, moved} = touchState;
+    touchState = null;
+    if(moved) return; // was a scroll — the list stays open, nothing gets selected
+    e.preventDefault(); // stop the follow-up synthetic click from double-handling this tap
+    selectItem(item);
   }, {passive:false});
+  container.addEventListener('touchcancel', ()=>{ touchState = null; });
   container.addEventListener('click', (e)=>{
     if(e.target.closest('.prod-search-item')) return; // already handled on press-down above
     if(!e.target.closest('.prod-search-wrap')){
