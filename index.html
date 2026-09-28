@@ -505,6 +505,79 @@ const EXPENSE_CATEGORIES = ["Transport","Daily Allowance (Workers)","Wages / Lab
 const EXPENSE_PAYMENT_METHODS = ["Cash","Bank Transfer","Mobile Money","Cheque"];
 const SESSION_KEY = "elemawusi_session_user";
 const BRANCH_KEY = "elemawusi_session_branch";
+const SESSION_BACKUP_KEY = "elemawusi_session_backup"; // {u, t} — survives refreshes even where sessionStorage doesn't
+const UI_STATE_KEY = "elemawusi_ui_state";             // current tab + sale in progress
+let UI_PERSIST_PAUSED = false;
+const SESSION_MAX_IDLE_MS = 10*60*1000; // same as the inactivity auto-logout limit
+
+// ---- Session persistence: keep the user signed in across page refreshes ----
+function saveSession(username){
+  try{ sessionStorage.setItem(SESSION_KEY, username); }catch(e){}
+  try{ localStorage.setItem(SESSION_BACKUP_KEY, JSON.stringify({u:username, t:Date.now()})); }catch(e){}
+}
+function touchSession(){
+  try{
+    const raw = localStorage.getItem(SESSION_BACKUP_KEY); if(!raw) return;
+    const o = JSON.parse(raw);
+    if(Date.now() - (o.t||0) > 4000){ o.t = Date.now(); localStorage.setItem(SESSION_BACKUP_KEY, JSON.stringify(o)); }
+  }catch(e){}
+}
+function loadSavedSession(){
+  let u = null;
+  try{ u = sessionStorage.getItem(SESSION_KEY); }catch(e){}
+  if(u) return u;
+  try{
+    const o = JSON.parse(localStorage.getItem(SESSION_BACKUP_KEY)||'null');
+    if(o && o.u && (Date.now() - (o.t||0)) <= SESSION_MAX_IDLE_MS) return o.u;
+  }catch(e){}
+  return null;
+}
+function clearSavedSession(){
+  try{ sessionStorage.removeItem(SESSION_KEY); }catch(e){}
+  try{ localStorage.removeItem(SESSION_BACKUP_KEY); }catch(e){}
+  try{ localStorage.removeItem(UI_STATE_KEY); }catch(e){}
+}
+
+// ---- UI persistence: remember the open tab and any sale in progress ----
+const SALE_FIELD_IDS = ['s_customer','s_phone','s_date','s_discType','s_discVal','s_tax','s_pmethod','s_paid','s_cash','s_momo','s_momoOption','s_delivery','s_delivery_addr','s_notes','s_collection','s_collDate'];
+function persistUiState(){
+  if(UI_PERSIST_PAUSED || !STATE.currentUser) return;
+  try{
+    const st = {u:STATE.currentUser.username, t:Date.now(), tab:STATE.tab, salesSubView:STATE.salesSubView, draft:null};
+    if(STATE.tab==='sales' && STATE.salesSubView==='builder' && STATE.saleDraft && document.getElementById('s_customer')){
+      const d = STATE.saleDraft, fields = {};
+      SALE_FIELD_IDS.forEach(id=>{ const el = document.getElementById(id); if(el) fields[id] = el.value; });
+      st.draft = {editingId:d.editingId||null, items:d.items, appliedDeposit:d.appliedDeposit||null, fields};
+    }
+    localStorage.setItem(UI_STATE_KEY, JSON.stringify(st));
+  }catch(e){}
+}
+function readUiState(username){
+  try{
+    const st = JSON.parse(localStorage.getItem(UI_STATE_KEY)||'null');
+    return (st && st.u===username) ? st : null;
+  }catch(e){ return null; }
+}
+function restoreUiState(saved){
+  if(!saved) return;
+  if(saved.tab && TITLES[saved.tab]) navigate(saved.tab);
+  if(STATE.tab==='sales' && saved.salesSubView==='builder' && saved.draft){
+    const d = saved.draft;
+    const orig = d.editingId ? STATE.sales.find(x=>x.id==d.editingId) : null;
+    if(d.editingId && !orig) return;
+    STATE.saleDraft = {
+      editingId: d.editingId||null,
+      items: (d.items&&d.items.length)? d.items : [{id:uid(), productId:'', qty:1, unitPrice:0, unit:''}],
+      orig, appliedDeposit: d.appliedDeposit||null
+    };
+    STATE.salesSubView = 'builder';
+    render();
+    Object.entries(d.fields||{}).forEach(([id,val])=>{ const el = byId(id); if(el) el.value = val; });
+    ['s_pmethod','s_collection'].forEach(id=>{ const el = byId(id); if(el) el.dispatchEvent(new Event('change',{bubbles:true})); });
+    renderTotalsBox();
+    toast('Restored your sale in progress');
+  }
+}
 
 /* ---------------- Firebase config ----------------
    1. Go to https://console.firebase.google.com -> Create project.
@@ -815,7 +888,7 @@ async function init(){
   // entirely and throw on access rather than just returning null. Either way, a saved token
   // read here is what lets a page refresh skip the login screen further down.
   let savedUser = null;
-  try{ savedUser = sessionStorage.getItem(SESSION_KEY); }catch(e){ console.warn('sessionStorage unavailable:', e); }
+  savedUser = loadSavedSession();
   try{
     await openDB();
     await ensureSettings();
@@ -837,11 +910,19 @@ async function init(){
       } else {
         STATE.currentBranch = matchBranch;
       }
-      enterApp();
+      const savedUi = readUiState(match.username);
+      UI_PERSIST_PAUSED = true;
+      try{
+        enterApp();
+        restoreUiState(savedUi);
+      } finally { UI_PERSIST_PAUSED = false; }
+      persistUiState();
+      saveSession(match.username);
+      resetInactivityTimer();
     } else {
       // A leftover token that no longer matches a real, active user (deleted/deactivated
       // account) is worthless — clear it so the login screen doesn't try it again later.
-      if(savedUser){ try{ sessionStorage.removeItem(SESSION_KEY); }catch(e){} }
+      if(savedUser){ clearSavedSession(); }
       showLogin();
     }
   }catch(err){
@@ -960,7 +1041,8 @@ async function doLogin(){
     // Session token lives in sessionStorage (not localStorage): it survives a page refresh
     // within the same tab/app session, but is cleared as soon as the tab/app is closed —
     // so a brand-new session always demands the password again, instead of logging in forever.
-    sessionStorage.setItem(SESSION_KEY, user.username);
+    saveSession(user.username);
+    try{ localStorage.removeItem(UI_STATE_KEY); }catch(e){}
     enterApp();
     resetInactivityTimer();
     await logActivity('Login', 'Signed in');
@@ -979,7 +1061,7 @@ function doLogout(){
   if(STATE.currentUser) logActivity('Logout', 'Signed out');
   clearTimeout(inactivityTimer);
   STATE.currentUser = null;
-  sessionStorage.removeItem(SESSION_KEY);
+  clearSavedSession();
   closeSidebar();
   showLogin();
 }
@@ -1094,8 +1176,13 @@ function resetInactivityTimer(){
   }, INACTIVITY_LIMIT_MS);
 }
 ['click','keydown','mousemove','touchstart','scroll'].forEach(evt=>{
-  document.addEventListener(evt, ()=>{ if(STATE.currentUser) resetInactivityTimer(); }, {passive:true});
+  document.addEventListener(evt, ()=>{ if(STATE.currentUser){ resetInactivityTimer(); touchSession(); } }, {passive:true});
 });
+// Save what the user is typing (sale in progress) shortly after each change, and again as the page closes/refreshes.
+let _uiPersistTimer = null;
+['input','change'].forEach(evt=> document.addEventListener(evt, ()=>{ clearTimeout(_uiPersistTimer); _uiPersistTimer = setTimeout(persistUiState, 300); }, true));
+window.addEventListener('pagehide', persistUiState);
+document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') persistUiState(); });
 
 async function refreshAll(){
   STATE.products = (await getAll('products')).sort((a,b)=>a.name.localeCompare(b.name));
@@ -1240,6 +1327,7 @@ function render(){
   else if(STATE.tab==='settings') v.innerHTML = renderSettings();
   else if(STATE.tab==='users') v.innerHTML = renderUsers();
   wireTabEvents();
+  persistUiState();
 }
 
 /* ---------------- global events (delegation) ---------------- */
