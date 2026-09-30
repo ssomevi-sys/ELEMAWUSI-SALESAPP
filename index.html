@@ -797,7 +797,16 @@ function startLiveSync(){
   };
   allStores.forEach(store=>{
     fsdb.collection(store).onSnapshot(
-      ()=>{ markDbReachable(true); queueRefresh(); },
+      (snap)=>{
+        markDbReachable(true);
+        // Every local save already calls refreshAll() itself right after writing, and then
+        // fires this listener a moment later for that same write (hasPendingWrites: true)
+        // before firing again once the server confirms it — that first echo is redundant
+        // and was doubling the reload/re-render cost of every single save. Skip just that
+        // echo; a remote change (or the server's own confirmation) still refreshes as normal.
+        if(snap && snap.metadata && snap.metadata.hasPendingWrites) return;
+        queueRefresh();
+      },
       (err)=>{ console.error('Live sync error on', store, err); markDbReachable(false); }
     );
   });
@@ -1185,23 +1194,39 @@ window.addEventListener('pagehide', persistUiState);
 document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') persistUiState(); });
 
 async function refreshAll(){
-  STATE.products = (await getAll('products')).sort((a,b)=>a.name.localeCompare(b.name));
-  STATE.sales = (await getAll('sales')).sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
-  STATE.priceHistory = (await getAll('priceHistory')).sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
-  STATE.stockLog = (await getAll('stockLog')).sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
-  STATE.expenditures = (await getAll('expenditures')).sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
-  STATE.stockTransport = (await getAll('stockTransport')).sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
-  STATE.deliveries = (await getAll('deliveries')).sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
-  STATE.deposits = (await getAll('deposits')).sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
-  STATE.internalUsage = (await getAll('internalUsage')).sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
-  STATE.stockTransfers = (await getAll('stockTransfers')).sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
-  STATE.supplies = (await getAll('supplies')).sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
-  STATE.customerCredit = (await getAll('customerCredit')).sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
-  STATE.returns = (await getAll('returns')).sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
-  STATE.unitConversions = (await getAll('unitConversions')).sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
-  STATE.boms = (await getAll('boms')).sort((a,b)=>a.id-b.id);
-  STATE.users = (await getAll('users')).sort((a,b)=>a.username.localeCompare(b.username));
-  STATE.activityLog = (await getAll('activityLog')).sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id).slice(0,500);
+  // Read every store in parallel instead of one at a time — with many stores this turns
+  // N sequential IndexedDB round trips into a single wait for the slowest one, which is
+  // most of what made every save/sync feel slow (Inventory included, since it re-renders
+  // off this same STATE after every refresh).
+  const [products, sales, priceHistory, stockLog, expenditures, stockTransport, deliveries,
+         deposits, internalUsage, stockTransfers, supplies, customerCredit, returns,
+         unitConversions, boms, users, activityLog] = await Promise.all([
+    getAll('products'), getAll('sales'), getAll('priceHistory'), getAll('stockLog'),
+    getAll('expenditures'), getAll('stockTransport'), getAll('deliveries'), getAll('deposits'),
+    getAll('internalUsage'), getAll('stockTransfers'), getAll('supplies'), getAll('customerCredit'),
+    getAll('returns'), getAll('unitConversions'), getAll('boms'), getAll('users'), getAll('activityLog')
+  ]);
+  STATE.products = products.sort((a,b)=>a.name.localeCompare(b.name));
+  STATE.sales = sales.sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
+  STATE.priceHistory = priceHistory.sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
+  STATE.stockLog = stockLog.sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
+  STATE.expenditures = expenditures.sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
+  STATE.stockTransport = stockTransport.sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
+  STATE.deliveries = deliveries.sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
+  STATE.deposits = deposits.sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
+  STATE.internalUsage = internalUsage.sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
+  STATE.stockTransfers = stockTransfers.sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
+  STATE.supplies = supplies.sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
+  STATE.customerCredit = customerCredit.sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
+  STATE.returns = returns.sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
+  STATE.unitConversions = unitConversions.sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id);
+  STATE.boms = boms.sort((a,b)=>a.id-b.id);
+  STATE.users = users.sort((a,b)=>a.username.localeCompare(b.username));
+  STATE.activityLog = activityLog.sort((a,b)=> new Date(b.date)-new Date(a.date) || b.id-a.id).slice(0,500);
+  // Precomputed lookups so screens like Inventory don't re-scan the whole boms/products
+  // array once per row (an O(rows × boms) scan that got slow once the catalog grew).
+  STATE.bomsByKitId = new Map(STATE.boms.filter(b=>b.active!==false).map(b=>[String(b.kitProductId), b]));
+  STATE.productsById = new Map(STATE.products.map(p=>[String(p.id), p]));
 }
 
 let lastKnownOnline = null; // null = not yet determined
@@ -1539,6 +1564,12 @@ function momoIndicator(s){
    ============================================================ */
 let invFilter = {q:'', category:''};
 let invSearchDebounce = null;
+// Rendering every product row at once got slow once the catalog grew into the hundreds —
+// a store with e.g. 1,500 products was building 1,500 <tr> blocks (each with stock-bar,
+// kit lookup, etc.) into one giant innerHTML string on every load. Page it instead: only
+// build the rows actually on screen, with a "Show more" button for the rest.
+const INV_PAGE_SIZE = 100;
+let invVisibleCount = INV_PAGE_SIZE;
 let actSearchDebounce = null;
 // Products the app should normally show/search (excludes soft-deleted ones, which live in Trash
 // but stay in STATE.products so past sales/purchases referencing them still resolve by id).
@@ -1553,6 +1584,8 @@ function renderInventory(){
     return matchQ && matchC;
   });
   const trashCount = STATE.products.filter(p=>p.deletedAt && inBranch(p)).length;
+  const visibleRows = rows.slice(0, invVisibleCount);
+  const remaining = rows.length - visibleRows.length;
   return `
     <div class="help-box">Viewing inventory for <b>${esc(branchName(STATE.currentBranch))}</b>. Each shop keeps its own separate stock — use Stock Transfers to move goods between Main Shop and ELEMAWUSI ANNEX in either direction. If an item is bought in bulk (Ton, Bag, Box, Kg) but sold in smaller units (Piece, Kg, etc.), use "Convert Units" on that product to break bulk stock down into a sellable-unit product — it deducts from the bulk item and adds to the smaller-unit item automatically.</div>
     <div class="panel">
@@ -1579,7 +1612,7 @@ function renderInventory(){
       <table>
         <thead><tr><th>Product</th><th>Category</th><th>SKU</th><th>Unit</th><th class="right">Cost</th><th class="right">Price</th><th class="right">Stock</th><th>Status</th><th></th></tr></thead>
         <tbody>
-        ${rows.length? rows.map(p=>{
+        ${visibleRows.length? visibleRows.map(p=>{
           const low = Number(p.stockQty) <= Number(p.reorderLevel||0);
           const pct = Math.min(100, p.reorderLevel? (p.stockQty/(p.reorderLevel*2))*100 : 100);
           const bom = invShowTrash ? null : activeBomFor(p.id);
@@ -1614,6 +1647,11 @@ function renderInventory(){
         </tbody>
       </table>
       </div>
+      ${remaining>0? `
+        <div style="display:flex;justify-content:center;padding:14px">
+          <button class="btn" id="invShowMoreBtn">Show ${Math.min(remaining, INV_PAGE_SIZE)} more (${remaining} left of ${rows.length})</button>
+        </div>
+      `:''}
     </div>
   `;
 }
@@ -3150,6 +3188,7 @@ function toBaseQty(p, unitName, qty){
    itself is never stocked — selling it (or voiding/returning a sale of it) instead
    moves stock on its components, converted into each component's own base unit. */
 function activeBomFor(productId){
+  if(STATE.bomsByKitId) return STATE.bomsByKitId.get(String(productId));
   return (STATE.boms||[]).find(b => String(b.kitProductId)===String(productId) && b.active!==false);
 }
 // Kept for reference/possible future use, but no longer used to drive Inventory or Sales
@@ -5904,7 +5943,7 @@ function wireTabEvents(){
     });
     printBarcodeLabels(visible);
   });
-  const toggleTrashBtn = byId('toggleTrashBtn'); if(toggleTrashBtn) toggleTrashBtn.addEventListener('click', ()=>{ invShowTrash = !invShowTrash; renderInventoryPartial(); });
+  const toggleTrashBtn = byId('toggleTrashBtn'); if(toggleTrashBtn) toggleTrashBtn.addEventListener('click', ()=>{ invShowTrash = !invShowTrash; invVisibleCount=INV_PAGE_SIZE; renderInventoryPartial(); });
 
   // Activity Log
   const actSearch = byId('actSearch');
@@ -5929,6 +5968,7 @@ function wireTabEvents(){
     invSearchDebounce = setTimeout(()=>{
       if(val.length===0 || val.length>=4){
         invFilter.q = val;
+        invVisibleCount = INV_PAGE_SIZE;
         const caret = e.target.selectionStart;
         renderInventoryPartial();
         const fresh = byId('invSearch');
@@ -5936,7 +5976,8 @@ function wireTabEvents(){
       }
     }, 200);
   });
-  const invCat = byId('invCategory'); if(invCat) invCat.addEventListener('change', (e)=>{invFilter.category=e.target.value; renderInventoryPartial();});
+  const invCat = byId('invCategory'); if(invCat) invCat.addEventListener('change', (e)=>{invFilter.category=e.target.value; invVisibleCount=INV_PAGE_SIZE; renderInventoryPartial();});
+  const invShowMoreBtn = byId('invShowMoreBtn'); if(invShowMoreBtn) invShowMoreBtn.addEventListener('click', ()=>{ invVisibleCount += INV_PAGE_SIZE; renderInventoryPartial(); });
 
   // Supplies
   const newSupplyBtn = v.querySelector('[data-action="new-supply"]'); if(newSupplyBtn) newSupplyBtn.addEventListener('click', ()=>openSupplyBuilder(null));
