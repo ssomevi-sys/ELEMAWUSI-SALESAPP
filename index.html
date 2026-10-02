@@ -1661,11 +1661,13 @@ function stockBreakdown(p){
   if(!p || !Array.isArray(p.altUnits) || !p.altUnits.length) return [];
   const base = Number(p.stockQty)||0;
   return p.altUnits.map(u=>{
-    const per = Number(u.unitsPerBase)||0;
+    const cnt = Number(u.countPerBase)||0;
+    const per = cnt>0 ? 1/cnt : (Number(u.unitsPerBase)||0);
     if(per<=0) return null;
-    const whole = Math.floor(base/per);
-    const remainder = +(base - whole*per).toFixed(4);
-    return {name:u.name, qty:whole, remainder, per};
+    const ratio = cnt>0 ? base*cnt : base/per;
+    const whole = Math.floor(+ratio.toFixed(6)); // guards against 28.999999 style float noise
+    const rem = +(base - whole*per).toFixed(4);
+    return {name:u.name, qty:whole, remainder: rem>0 ? rem : 0, per};
   }).filter(Boolean);
 }
 // Short one-line summary of the breakdown, e.g. "32 ton + 0 bag"
@@ -1720,19 +1722,33 @@ function iconTrash(){return `<svg viewBox="0 0 24 24" fill="none" stroke="curren
 function iconBox(){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 8l-9-5-9 5 9 5 9-5zM3 8v8l9 5M21 8v8l-9 5M12 13v8"/></svg>`;}
 function iconConvert(){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17 3l4 4-4 4M3 11V9a4 4 0 014-4h14M7 21l-4-4 4-4M21 13v2a4 4 0 01-4 4H3"/></svg>`;}
 
+// A "Sell Also In" row. The MAIN unit (set at the top of the form, beside Category) is the bigger
+// / bulk unit — e.g. Box. Rows here are normally SMALLER units of it (e.g. Piece: 1 Box = 12 Piece).
+// Older products that were set up the other way round (a bigger unit added to a small main unit)
+// still load correctly: such a row opens as "Bigger than <main unit>".
 function altUnitRowHtml(u, idx, baseUnit){
   u = u || {name:'', unitsPerBase:'', price:''};
+  let dir = 'smaller', count = '';
+  if(Number(u.countPerBase)>0){ count = u.countPerBase; }
+  else if(Number(u.unitsPerBase)>1){ dir = 'bigger'; count = u.unitsPerBase; }
+  else if(Number(u.unitsPerBase)>0){ count = +(1/Number(u.unitsPerBase)).toFixed(6); }
   return `<div class="field-row alt-unit-row" data-idx="${idx}" style="align-items:flex-end;border-top:${idx>0?'1px dashed #ddd;padding-top:10px;margin-top:6px':'none'}">
     <div class="field"><label>Sell Also In (Unit)</label>
       <select class="au-name">${unitOptionsHtml(u.name)}</select>
     </div>
-    <div class="field"><label>1 of this unit = how many <span class="js-base-unit">${esc(baseUnit)}</span>?</label>
-      <input type="number" min="0.0001" step="any" class="au-perbase" value="${u.unitsPerBase||''}" placeholder="e.g. 125">
+    <div class="field"><label>This unit is</label>
+      <select class="au-dir">
+        <option value="smaller" ${dir==='smaller'?'selected':''}>Smaller than ${esc(baseUnit)}</option>
+        <option value="bigger" ${dir==='bigger'?'selected':''}>Bigger than ${esc(baseUnit)}</option>
+      </select>
     </div>
-    <div class="field"><label>Price per unit (optional)</label>
+    <div class="field"><label class="au-per-label">1 ${esc(baseUnit)} = how many of this unit?</label>
+      <input type="number" min="0.0001" step="any" class="au-perbase" value="${count}" placeholder="e.g. 12">
+    </div>
+    <div class="field"><label class="au-price-label">Price per unit (optional)</label>
       <input type="number" min="0" step="0.01" class="au-price" value="${u.price||''}" placeholder="auto if blank">
     </div>
-    <button type="button" class="icon-btn au-calc" title="Know this unit's price already? Tap to back-calculate the main Selling Price (this price ÷ the conversion number)">${iconConvert()}</button>
+    <button type="button" class="icon-btn au-calc" title="Know this unit's price already? Tap to back-calculate the main Selling Price from it">${iconConvert()}</button>
     <button type="button" class="icon-btn au-remove" title="Remove">${iconTrash()}</button>
   </div>`;
 }
@@ -1741,9 +1757,43 @@ function renderAltUnitsBox(list, baseUnit){
   return `<div id="altUnitsRows">${list.map((u,i)=>altUnitRowHtml(u,i,baseUnit)).join('') || altUnitRowHtml(null,0,baseUnit)}</div>
     <button type="button" class="btn btn-sm" id="addAltUnitBtn" style="margin-top:4px">＋ Add Another Selling Unit</button>`;
 }
+// How many MAIN units one of this row's unit equals (e.g. Piece in a 12-per-Box product = 1/12).
+function altRowUnitsPerBase(row){
+  const n = parseFloat(row.querySelector('.au-perbase').value)||0;
+  if(n<=0) return 0;
+  return row.querySelector('.au-dir').value==='smaller' ? 1/n : n;
+}
+// Keeps every label in the form in step with the chosen main unit and each row's unit/direction.
+function refreshUnitLabels(){
+  const base = (byId('f_unit')||{}).value || '';
+  const mainPrice = parseFloat((byId('f_price')||{}).value)||0;
+  document.querySelectorAll('#altUnitsBox .alt-unit-row').forEach(row=>{
+    const name = row.querySelector('.au-name').value;
+    const dir = row.querySelector('.au-dir').value;
+    row.querySelector('.au-dir').options[0].textContent = `Smaller than ${base}`;
+    row.querySelector('.au-dir').options[1].textContent = `Bigger than ${base}`;
+    row.querySelector('.au-per-label').textContent = dir==='smaller' ? `1 ${base} = how many ${name}?` : `1 ${name} = how many ${base}?`;
+    row.querySelector('.au-price-label').textContent = `Price per ${name} (optional)`;
+    const upb = altRowUnitsPerBase(row);
+    const priceInput = row.querySelector('.au-price');
+    priceInput.placeholder = (upb>0 && mainPrice>0) ? `auto: ${(+(mainPrice*upb).toFixed(2))}` : 'auto if blank';
+  });
+  // Live total in smaller units: stock (in the main unit) x pieces per main unit, e.g. 11 Box x 32 = 352 Piece.
+  const hintEl = byId('stockCalcHint');
+  if(hintEl){
+    const stock = parseFloat((byId('f_stock')||{}).value)||0;
+    const parts = [];
+    document.querySelectorAll('#altUnitsBox .alt-unit-row').forEach(row=>{
+      const n = parseFloat(row.querySelector('.au-perbase').value)||0;
+      const nm = row.querySelector('.au-name').value;
+      if(row.querySelector('.au-dir').value==='smaller' && n>0 && nm && nm!==base) parts.push(`${fmtNum(+(stock*n).toFixed(4))} ${nm}`);
+    });
+    hintEl.textContent = parts.length ? `= ${parts.join(' · ')} (${fmtNum(stock)} ${base} × pieces per ${base})` : '';
+  }
+}
 function wireAltUnitsEvents(){
   const box = byId('altUnitsBox');
-  const baseUnitOf = ()=> formBaseUnit();
+  const baseUnitOf = ()=> byId('f_unit').value;
   const reindex = ()=>{
     box.querySelectorAll('.alt-unit-row').forEach((row,i)=>{
       row.dataset.idx = i;
@@ -1755,6 +1805,7 @@ function wireAltUnitsEvents(){
   byId('addAltUnitBtn').addEventListener('click', ()=>{
     byId('altUnitsRows').insertAdjacentHTML('beforeend', altUnitRowHtml(null, box.querySelectorAll('.alt-unit-row').length, baseUnitOf()));
     reindex();
+    refreshUnitLabels();
     const newRow = box.querySelector('.alt-unit-row:last-of-type');
     if(newRow && newRow.scrollIntoView) newRow.scrollIntoView({behavior:'smooth', block:'center'});
     toast('New selling-unit row added below — scroll down if you don\'t see it');
@@ -1763,7 +1814,7 @@ function wireAltUnitsEvents(){
     if(e.target.closest('.au-remove')){
       const row = e.target.closest('.alt-unit-row');
       const rows = box.querySelectorAll('.alt-unit-row');
-      if(rows.length<=1){ row.querySelectorAll('input').forEach(i=>i.value=''); return; }
+      if(rows.length<=1){ row.querySelectorAll('input').forEach(i=>i.value=''); refreshUnitLabels(); return; }
       row.remove();
       reindex();
     }
@@ -1771,23 +1822,23 @@ function wireAltUnitsEvents(){
     if(calcBtn){
       const row = calcBtn.closest('.alt-unit-row');
       const unitName = row.querySelector('.au-name').value;
-      const perBase = parseFloat(row.querySelector('.au-perbase').value)||0;
+      const upb = altRowUnitsPerBase(row);
       const unitPrice = parseFloat(row.querySelector('.au-price').value)||0;
-      if(perBase<=0 || unitPrice<=0){
-        toast(`Enter both "${unitName}" price and how many ${baseUnitOf()} it equals first`, 'error');
+      if(upb<=0 || unitPrice<=0){
+        toast(`Enter both the ${unitName} price and how many it takes to make one ${baseUnitOf()} first`, 'error');
         return;
       }
-      const basePrice = unitPrice / perBase;
+      const basePrice = +(unitPrice / upb).toFixed(4);
       byId('f_price').value = basePrice;
-      toast(`Selling Price set to ${fmtNum(basePrice)} (${unitPrice} ÷ ${perBase})`);
+      refreshUnitLabels();
+      toast(`Selling Price per ${baseUnitOf()} set to ${fmtNum(basePrice)}`);
     }
   });
-  byId('f_unit').addEventListener('change', reindex);
-  ['f_unit','f_small_unit','f_small_per','f_stock','f_price'].forEach(id=>{
-    const el = byId(id);
-    el.addEventListener('input', refreshUnitLabels);
-    el.addEventListener('change', refreshUnitLabels);
-  });
+  box.addEventListener('change', refreshUnitLabels);
+  box.addEventListener('input', refreshUnitLabels);
+  byId('f_price').addEventListener('input', refreshUnitLabels);
+  if(byId('f_stock')) byId('f_stock').addEventListener('input', refreshUnitLabels);
+  byId('f_unit').addEventListener('change', ()=>{ reindex(); refreshUnitLabels(); });
   refreshUnitLabels();
 }
 function collectAltUnits(baseUnit){
@@ -1795,64 +1846,26 @@ function collectAltUnits(baseUnit){
   const out = [];
   rows.forEach(row=>{
     const name = row.querySelector('.au-name').value;
-    const unitsPerBase = parseFloat(row.querySelector('.au-perbase').value)||0;
+    const n = parseFloat(row.querySelector('.au-perbase').value)||0;
     const price = row.querySelector('.au-price').value;
-    if(name && unitsPerBase>0 && name!==baseUnit){
-      out.push({name, unitsPerBase, price: price!==''? parseFloat(price)||0 : null});
+    if(!name || n<=0 || name===baseUnit) return;
+    const priceVal = price!=='' ? (parseFloat(price)||0) : null;
+    if(row.querySelector('.au-dir').value==='smaller'){
+      // countPerBase (e.g. 12 pieces per box) is kept exactly so stock maths stays precise.
+      out.push({name, unitsPerBase: 1/n, countPerBase: n, price: priceVal});
+    } else {
+      out.push({name, unitsPerBase: n, price: priceVal});
     }
   });
   return out;
 }
-// ----- Bigger unit + smaller unit (e.g. Box of 32 Pieces) -----
-// The form asks for the BIGGER unit first (beside Category) and then the SMALLER unit with how many
-// of it fit in one bigger unit. Stock is typed in bigger units (11 Box) and kept as the total of
-// smaller units (11 x 32 = 352 Piece) so sales by the piece are exact. Stock, cost and selling price
-// are held per smaller unit; the bigger unit becomes one of the "sell in" units automatically.
-function unitModelFromProduct(p){
-  const alts = Array.isArray(p.altUnits) ? p.altUnits : [];
-  const i = p.id ? alts.findIndex(u=> Number(u.unitsPerBase)>1 && !(Number(u.countPerBase)>0)) : -1;
-  if(i>=0){
-    const u = alts[i];
-    return {big:u.name, small:p.unit, per:Number(u.unitsPerBase), bigPrice:(u.price!=null? u.price : ''), extras:alts.filter((_,k)=>k!==i)};
-  }
-  return {big:p.unit, small:'', per:'', bigPrice:'', extras:alts};
-}
-function formUnitState(){
-  const big = byId('f_unit').value, small = byId('f_small_unit').value;
-  const per = parseFloat(byId('f_small_per').value)||0;
-  const useSmall = per>0 && !!small && small!==big;
-  return {big, small, per, useSmall, base: useSmall? small : big};
-}
-function formBaseUnit(){ return formUnitState().base; }
-function refreshUnitLabels(){
-  if(!byId('f_unit') || !byId('f_small_unit')) return;
-  const s = formUnitState();
-  document.querySelectorAll('.js-base-unit').forEach(el=>{ el.textContent = s.base; });
-  document.querySelectorAll('.js-big-unit').forEach(el=>{ el.textContent = s.big; });
-  document.querySelectorAll('.js-small-unit').forEach(el=>{ el.textContent = s.small; });
-  const stockEl = byId('f_stock'), isEdit = stockEl.disabled;
-  const raw = parseFloat(stockEl.value)||0;
-  byId('stockUnitLbl').textContent = (!isEdit && s.useSmall) ? `enter number of ${s.big}` : `in ${s.base}`;
-  byId('stockCalcHint').textContent = !s.useSmall ? '' : (isEdit
-    ? `= ${fmtNum(+(raw/s.per).toFixed(4))} ${s.big}`
-    : `= ${fmtNum(+(raw*s.per).toFixed(6))} ${s.small} in total (${fmtNum(raw)} ${s.big} × ${fmtNum(s.per)})`);
-  const mainPrice = parseFloat(byId('f_price').value)||0;
-  byId('f_big_price').placeholder = (s.useSmall && mainPrice>0) ? `auto: ${+(mainPrice*s.per).toFixed(2)}` : 'auto if blank';
-}
 function productFormHtml(p){
   p = p || {name:'',category:CATEGORIES[0],sku:'',unit:allUnits()[0],costPrice:'',sellingPrice:'',stockQty:'',reorderLevel:'',dimensions:'',notes:'',altUnits:[]};
-  const m = unitModelFromProduct(p);
-  const smallDefault = m.small || allUnits().find(u=>u.toLowerCase()==='piece') || allUnits()[0];
   return `
     <div class="field"><label>Product Name *</label><input type="text" id="f_name" value="${esc(p.name)}" placeholder="e.g. Dangote Cement 50kg Bag, 12mm Iron Rod"></div>
     <div class="field-row">
       <div class="field"><label>Category *</label><select id="f_category">${CATEGORIES.map(c=>`<option ${p.category===c?'selected':''}>${esc(c)}</option>`).join('')}</select></div>
-      <div class="field"><label>Unit * <span class="hint" style="font-weight:400">(the BIGGER unit of sale, e.g. Box, Bag, Carton)</span></label><select id="f_unit">${unitOptionsHtml(m.big)}</select></div>
-    </div>
-    <div class="field-row">
-      <div class="field"><label>Smaller Unit <span class="hint" style="font-weight:400">(the pieces inside one <span class="js-big-unit">${esc(m.big)}</span>, e.g. Piece)</span></label><select id="f_small_unit">${unitOptionsHtml(smallDefault)}</select></div>
-      <div class="field"><label>How many <span class="js-small-unit">${esc(smallDefault)}</span> in 1 <span class="js-big-unit">${esc(m.big)}</span>?</label><input type="number" min="0" step="any" id="f_small_per" value="${m.per}" placeholder="e.g. 32 (leave blank if sold singly)"></div>
-      <div class="field"><label>Price per <span class="js-big-unit">${esc(m.big)}</span> (optional)</label><input type="number" min="0" step="0.01" id="f_big_price" value="${m.bigPrice}" placeholder="auto if blank"></div>
+      <div class="field"><label>Unit * <span class="hint" style="font-weight:400">(main unit you count stock, cost &amp; price in, e.g. Box, Bag — put its pieces under “Sell Also In” below)</span></label><select id="f_unit">${unitOptionsHtml(p.unit)}</select></div>
     </div>
     <div class="field-row">
       <div class="field"><label>SKU / Code</label><input type="text" id="f_sku" value="${esc(p.sku)}" placeholder="optional"></div>
@@ -1866,17 +1879,17 @@ function productFormHtml(p){
       ${p.barcode? `<div id="barcodePreview" style="margin-top:8px;background:#fff;padding:8px;border:1px solid var(--border);border-radius:var(--radius-sm);display:inline-block"><svg id="barcodeSvg"></svg></div>` : ''}
     </div>
     <div class="field-row">
-      <div class="field"><label>Cost Price (${esc(STATE.settings.currencySymbol)}) * <span class="hint" style="font-weight:400">per <span class="js-base-unit">${esc(m.small||m.big)}</span></span></label><input type="number" step="0.01" min="0" id="f_cost" value="${p.costPrice}"></div>
-      <div class="field"><label>Selling Price (${esc(STATE.settings.currencySymbol)}) * <span class="hint" style="font-weight:400">per <span class="js-base-unit">${esc(m.small||m.big)}</span></span></label><input type="number" step="0.01" min="0" id="f_price" value="${p.sellingPrice}"></div>
+      <div class="field"><label>Cost Price (${esc(STATE.settings.currencySymbol)}) *</label><input type="number" step="0.01" min="0" id="f_cost" value="${p.costPrice}"></div>
+      <div class="field"><label>Selling Price (${esc(STATE.settings.currencySymbol)}) *</label><input type="number" step="0.01" min="0" id="f_price" value="${p.sellingPrice}"></div>
     </div>
     <div class="field-row">
-      <div class="field"><label>Opening / Current Stock * <span class="hint" style="font-weight:400" id="stockUnitLbl"></span></label><input type="number" step="any" min="0" id="f_stock" value="${p.stockQty}" ${p.id?'disabled':''}><div class="hint" id="stockCalcHint" style="margin-top:3px;font-weight:600"></div></div>
-      <div class="field"><label>Reorder Level <span class="hint" style="font-weight:400">in <span class="js-base-unit">${esc(m.small||m.big)}</span></span></label><input type="number" step="0.01" min="0" id="f_reorder" value="${p.reorderLevel}"></div>
+      <div class="field"><label>Opening / Current Stock *</label><input type="number" step="0.01" min="0" id="f_stock" value="${p.stockQty}" ${p.id?'disabled':''}><div class="hint" id="stockCalcHint" style="margin-top:3px;font-weight:600"></div></div>
+      <div class="field"><label>Reorder Level</label><input type="number" step="0.01" min="0" id="f_reorder" value="${p.reorderLevel}"></div>
     </div>
     ${p.id? `<div class="hint">To change stock quantity, use the "Adjust Stock" action instead — it keeps an audit log.</div>` : ''}
     <div class="field" style="margin-top:10px">
-      <label>Other Selling Units <span class="hint" style="font-weight:400">(optional — any extra unit you also sell in, e.g. a Carton of several Boxes). The Box/Piece setup above is already included automatically.</span></label>
-      <div id="altUnitsBox">${renderAltUnitsBox(m.extras, m.small||m.big)}</div>
+      <label>Sell Also In <span class="hint" style="font-weight:400">(e.g. main Unit = ${esc(p.unit)}: pick Piece, choose “Smaller than ${esc(p.unit)}”, enter how many pieces are in one ${esc(p.unit)} (like 32) and give the price per piece. The app multiplies your stock by that number to get the total pieces. Tap ${iconConvert()} to set the main Selling Price from a unit's price.)</span></label>
+      <div id="altUnitsBox">${renderAltUnitsBox(p.altUnits, p.unit)}</div>
     </div>
     <div class="field" style="margin-top:8px"><label>Notes</label><textarea id="f_notes" rows="2">${esc(p.notes)}</textarea></div>
   `;
@@ -1948,15 +1961,12 @@ async function saveProduct(existing){
   if(!existing && !canAddProduct()){ toast('Only an administrator can add products','error'); return; }
   const name = byId('f_name').value.trim();
   const category = byId('f_category').value;
-  const us = formUnitState();
-  const unit = us.base; // stock, cost and price are held per smaller unit (or the one unit if none)
+  const unit = byId('f_unit').value;
   const sku = byId('f_sku').value.trim();
   const dimensions = byId('f_dim').value.trim();
   const costPrice = parseFloat(byId('f_cost').value)||0;
   const sellingPrice = parseFloat(byId('f_price').value)||0;
-  const enteredStock = parseFloat(byId('f_stock').value)||0;
-  // New product: the stock typed is in bigger units (11 Box) -> total smaller units (11 x 32 = 352).
-  const stockQty = existing? existing.stockQty : (us.useSmall? +(enteredStock*us.per).toFixed(6) : enteredStock);
+  const stockQty = existing? existing.stockQty : (parseFloat(byId('f_stock').value)||0);
   const reorderLevel = parseFloat(byId('f_reorder').value)||0;
   const notes = byId('f_notes').value.trim();
   const barcodeInput = (byId('f_barcode')?.value||'').trim();
@@ -1965,12 +1975,7 @@ async function saveProduct(existing){
     const dupe = STATE.products.find(x=> x.barcode===barcodeInput && (!existing || x.id!=existing.id));
     if(dupe){ toast(`That barcode is already used by "${dupe.name}"`,'error'); return; }
   }
-  if(parseFloat(byId('f_small_per').value)>0 && us.small===us.big){ toast('The smaller unit must be different from the bigger unit (e.g. Box and Piece)','error'); return; }
-  let altUnits = collectAltUnits(unit);
-  if(us.useSmall){
-    const bp = byId('f_big_price').value;
-    altUnits = [{name:us.big, unitsPerBase:us.per, price: bp!==''? (parseFloat(bp)||0) : null}, ...altUnits.filter(a=>a.name!==us.big)];
-  }
+  const altUnits = collectAltUnits(unit);
   const now = new Date().toISOString();
   const rec = existing? {...existing} : {createdAt:now, branch: STATE.currentBranch};
   const priceChanged = existing && Number(existing.sellingPrice) !== sellingPrice;
@@ -3226,8 +3231,15 @@ function itemBaseQty(it, p){
 function sellUnitsFor(p){
   if(!p) return [];
   const base = {name:p.unit, unitsPerBase:1, price:Number(p.sellingPrice)};
-  const alts = (p.altUnits||[]).map(u=>({name:u.name, unitsPerBase:Number(u.unitsPerBase)||1,
-    price: (u.price!=null && u.price!=='') ? Number(u.price) : (Number(p.sellingPrice)*(Number(u.unitsPerBase)||1))}));
+  const alts = (p.altUnits||[]).map(u=>{
+    // Smaller units (e.g. Piece) carry countPerBase (32 per Box); older/bigger units carry unitsPerBase only.
+    const cnt = Number(u.countPerBase)||0;
+    const upb = cnt>0 ? 1/cnt : (Number(u.unitsPerBase)||1);
+    let price;
+    if(u.price!=null && u.price!=='') price = Number(u.price);
+    else price = cnt>0 ? +(Number(p.sellingPrice)/cnt).toFixed(2) : Number(p.sellingPrice)*upb;
+    return {name:u.name, unitsPerBase:upb, countPerBase: cnt>0? cnt : undefined, price};
+  });
   return [base, ...alts];
 }
 function unitInfoFor(p, unitName){
@@ -3238,7 +3250,9 @@ function unitInfoFor(p, unitName){
 function toBaseQty(p, unitName, qty){
   const info = unitInfoFor(p, unitName);
   if(!info) return Number(qty)||0;
-  return (Number(qty)||0) * (info.unitsPerBase||1);
+  const q = Number(qty)||0;
+  if(info.countPerBase>0) return q / info.countPerBase; // e.g. 5 pieces / 32 per box
+  return q * (info.unitsPerBase||1);
 }
 /* ---------------- Bill of Materials / Kits ----------------
    A BOM turns a "kit" product into a bundle of component products. The kit product
