@@ -547,7 +547,7 @@ function persistUiState(){
     if(STATE.tab==='sales' && STATE.salesSubView==='builder' && STATE.saleDraft && document.getElementById('s_customer')){
       const d = STATE.saleDraft, fields = {};
       SALE_FIELD_IDS.forEach(id=>{ const el = document.getElementById(id); if(el) fields[id] = el.value; });
-      st.draft = {editingId:d.editingId||null, items:d.items, appliedDeposit:d.appliedDeposit||null, fields};
+      st.draft = {editingId:d.editingId||null, items:d.items, bonusItems:d.bonusItems||[], appliedDeposit:d.appliedDeposit||null, fields};
     }
     localStorage.setItem(UI_STATE_KEY, JSON.stringify(st));
   }catch(e){}
@@ -568,6 +568,7 @@ function restoreUiState(saved){
     STATE.saleDraft = {
       editingId: d.editingId||null,
       items: (d.items&&d.items.length)? d.items : [{id:uid(), productId:'', qty:1, unitPrice:0, unit:''}],
+      bonusItems: Array.isArray(d.bonusItems)? d.bonusItems : [],
       orig, appliedDeposit: d.appliedDeposit||null
     };
     STATE.salesSubView = 'builder';
@@ -1498,6 +1499,8 @@ function renderDashboard(){
   const pendingCollectionValue = pendingCollection.reduce((a,s)=>a+Number(s.grandTotal||0),0);
   const internalThisMonth = STATE.internalUsage.filter(x=> inBranch(x)).filter(x=>{ const d=new Date(x.date); return d.getMonth()===now.getMonth() && d.getFullYear()===now.getFullYear(); });
   const internalUseMonth = internalThisMonth.reduce((a,x)=>a+Number(x.totalValue||0),0);
+  const promoThisMonth = promoBonusRecords().filter(r=>{ const d=new Date(r.date); return d.getMonth()===now.getMonth() && d.getFullYear()===now.getFullYear(); });
+  const promoMonth = promoThisMonth.reduce((a,r)=>a+r.costValue,0);
   const suppliesThisMonth = STATE.supplies.filter(x=> inBranch(x)).filter(x=>{ const d=new Date(x.date); return d.getMonth()===now.getMonth() && d.getFullYear()===now.getFullYear(); });
   const suppliesMonth = suppliesThisMonth.reduce((a,x)=>a+Number(x.amount||0),0);
 
@@ -1517,6 +1520,7 @@ function renderDashboard(){
       <div class="card"><div class="label">Pending Customer Deposits</div><div class="value ${pendingDeposits.length?'warn':'good'}">${money(pendingDepositsTotal)}</div><div class="sub">${pendingDeposits.length} customer(s) waiting</div></div>
       <div class="card"><div class="label">Delivery Fees — This Month</div><div class="value">${money(deliveryFeesMonth)}</div><div class="sub">${deliveriesThisMonth.length} delivery(ies) made</div></div>
       <div class="card"><div class="label">Internal / Personal Use — This Month</div><div class="value warn">${money(internalUseMonth)}</div><div class="sub">${internalThisMonth.length} item(s) taken from stock</div></div>
+      <div class="card"><div class="label">Promotional Bonuses — This Month</div><div class="value warn">${money(promoMonth)}</div><div class="sub">${promoThisMonth.length} bonus item(s) given (at cost)</div></div>
       <div class="card"><div class="label">Awaiting Collection</div><div class="value ${pendingCollection.length?'warn':'good'}">${pendingCollection.length}</div><div class="sub">${money(pendingCollectionValue)} in goods sold but not picked up</div></div>
     </div>
 
@@ -2984,7 +2988,7 @@ function openReturnRequestForm(s){
       <tbody>${s.items.map((it,idx)=>`
         <tr>
           <td><input type="checkbox" class="ret-item-chk" data-idx="${idx}"></td>
-          <td>${esc(it.name)}</td>
+          <td>${esc(it.name)}${it.bonus? ' <span class="badge badge-ok">BONUS</span>' : ''}</td>
           <td class="right mono">${fmtNum(it.qty)}</td>
           <td class="right"><input type="number" min="0" max="${it.qty}" step="0.01" class="ret-item-qty" data-idx="${idx}" value="${it.qty}" style="width:80px" disabled></td>
           <td class="right mono">${money(it.unitPrice)}</td>
@@ -3197,12 +3201,15 @@ async function rejectReturn(id){
 }
 
 function openSaleBuilder(existingSale){
+  const mapLine = it=>{
+    const p = STATE.products.find(x=>x.id==it.productId);
+    return {id:uid(), productId:it.productId, qty:it.qty, unitPrice:it.unitPrice, unit: it.unit || (p?p.unit:'')};
+  };
+  const paidLines = existingSale? existingSale.items.filter(it=>!it.bonus).map(mapLine) : [];
   STATE.saleDraft = {
     editingId: existingSale? existingSale.id : null,
-    items: existingSale? existingSale.items.map(it=>{
-      const p = STATE.products.find(x=>x.id==it.productId);
-      return {id:uid(), productId:it.productId, qty:it.qty, unitPrice:it.unitPrice, unit: it.unit || (p?p.unit:'')};
-    }) : [{id:uid(), productId:'', qty:1, unitPrice:0, unit:''}],
+    items: paidLines.length? paidLines : [{id:uid(), productId:'', qty:1, unitPrice:0, unit:''}],
+    bonusItems: existingSale? existingSale.items.filter(it=>it.bonus).map(it=>({...mapLine(it), unitPrice:0})) : [],
     orig: existingSale? existingSale : null,
     appliedDeposit: existingSale?.depositApplied || null
   };
@@ -3227,6 +3234,29 @@ function productLabel(p){
 function itemBaseQty(it, p){
   if(it.baseQty!=null) return Number(it.baseQty);
   return p? toBaseQty(p, it.unit||p.unit, it.qty) : Number(it.qty);
+}
+// ----- Bonus (free, in-kind) items -----
+// A bonus is stored as an ordinary sale line flagged bonus:true with price 0, so stock deduction,
+// editing, voiding, deleting and returning all keep working through the existing sale code.
+// refUnitPrice / refValue = what the item normally sells for; costValue = what it cost us.
+function promoBonusRecords(){
+  const rows = [];
+  STATE.sales.forEach(s=>{
+    if(!inBranch(s) || s.status==='void') return;
+    (s.items||[]).forEach(it=>{
+      if(!it.bonus) return;
+      const p = STATE.products.find(x=>x.id==it.productId);
+      rows.push({
+        saleId:s.id, invoiceNo:s.invoiceNo, date:s.date, customer:s.customerName||'Walk-in customer',
+        productName:it.name, unit:it.unit||'', qty:Number(it.qty)||0,
+        refUnitPrice: it.refUnitPrice!=null? Number(it.refUnitPrice) : 0,
+        refValue: it.refValue!=null? Number(it.refValue) : 0,
+        costValue: it.costValue!=null? Number(it.costValue) : (p? effectiveCostPerUnit(p)*itemBaseQty(it,p) : 0),
+        servedBy:s.createdByName||''
+      });
+    });
+  });
+  return rows.sort((a,b)=> String(b.date||'').localeCompare(String(a.date||'')) || String(b.invoiceNo).localeCompare(String(a.invoiceNo)));
 }
 function sellUnitsFor(p){
   if(!p) return [];
@@ -3684,6 +3714,17 @@ function renderSaleBuilder(){
         </table>
         </div>
         <button class="btn btn-sm" style="margin-top:10px" id="addLineBtn">＋ Add Item</button>
+        <button class="btn btn-sm" style="margin-top:10px;margin-left:6px" id="addBonusBtn" title="Give the customer free items in kind">🎁 Bonus</button>
+        <div id="bonusSection" style="${(d.bonusItems||[]).length? '' : 'display:none'};margin-top:16px;padding:12px;border:1px dashed #c9a227;border-radius:8px">
+          <div class="hint" style="margin-bottom:8px">🎁 <b>Bonus items</b> — free items given in kind (e.g. for buying up to a certain amount). They are priced <b>0.00</b> on the invoice, come off the stock, and are recorded under <b>Expenses → Promotional Expenses</b>.</div>
+          <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:32%">Bonus Product</th><th>Unit</th><th>Qty</th><th class="right">Price</th><th class="right">Normal Value</th><th></th></tr></thead>
+            <tbody id="bonusItemsBody">${renderBonusRows()}</tbody>
+          </table>
+          </div>
+          <button class="btn btn-sm" style="margin-top:8px" id="addBonusLineBtn">＋ Add Another Bonus Item</button>
+        </div>
 
         <div class="field-row" style="margin-top:20px">
           <div class="field"><label>Discount Type</label>
@@ -3839,6 +3880,33 @@ function renderLineItemsRows(){
     </tr>`;
   }).join('');
 }
+function renderBonusRows(){
+  return (STATE.saleDraft.bonusItems||[]).map(it=>{
+    const p = STATE.products.find(x=>x.id==it.productId);
+    const units = sellUnitsFor(p);
+    const unitSelect = p? `<select data-role="bunit" data-row="${it.id}">${units.map(u=>`<option value="${esc(u.name)}" ${it.unit===u.name?'selected':''}>${esc(u.name)}</option>`).join('')}</select>` : `<select data-role="bunit" data-row="${it.id}" disabled><option>—</option></select>`;
+    const info = p? unitInfoFor(p, it.unit) : null;
+    const refVal = info? Number(it.qty)*Number(info.price) : 0;
+    return `<tr data-row="${it.id}">
+      <td style="min-width:220px">${productSearchHtml('bonusprod', it.id, it.productId)}</td>
+      <td style="min-width:110px">${unitSelect}${p? `<div class="hint">= ${fmtNum(toBaseQty(p, it.unit, it.qty))} ${esc(p.unit)} of stock</div>` : ''}</td>
+      <td><input type="number" min="0" step="0.01" data-role="bqty" data-row="${it.id}" value="${it.qty}" style="width:90px"></td>
+      <td class="right"><span class="badge badge-ok">0.00 · BONUS</span></td>
+      <td class="right mono bonus-refval hint">${p? money(refVal) : '—'}</td>
+      <td class="right"><button class="icon-btn" data-action="removeBonusLine" data-row="${it.id}">${iconTrash()}</button></td>
+    </tr>`;
+  }).join('');
+}
+function updateBonusLine(rowId){
+  const row = STATE.saleDraft.bonusItems.find(it=>it.id==rowId); if(!row) return;
+  const p = STATE.products.find(x=>x.id==row.productId);
+  const tr = document.querySelector(`#bonusItemsBody tr[data-row="${rowId}"]`);
+  if(!tr || !p) return;
+  const info = unitInfoFor(p, row.unit);
+  tr.querySelector('.bonus-refval').textContent = money(Number(row.qty)*Number(info? info.price : 0));
+  const hint = tr.children[1].querySelector('.hint');
+  if(hint) hint.textContent = `= ${fmtNum(toBaseQty(p, row.unit, row.qty))} ${p.unit} of stock`;
+}
 function computeTotals(){
   const items = STATE.saleDraft.items.filter(it=>it.productId && it.qty>0);
   const subtotal = items.reduce((a,it)=>a+Number(it.qty)*Number(it.unitPrice),0);
@@ -3992,11 +4060,50 @@ function wireSaleBuilderEvents(){
       toast(`${cp.name} added as its own line`);
     }
   });
+  // ---- Bonus items: free, priced 0.00 ----
+  const bonusBody = byId('bonusItemsBody');
+  const refreshBonus = ()=>{ bonusBody.innerHTML = renderBonusRows(); };
+  const addBonusRow = ()=>{
+    STATE.saleDraft.bonusItems.push({id:uid(), productId:'', qty:1, unitPrice:0, unit:''});
+    refreshBonus();
+    const last = bonusBody.querySelector('tr:last-child .prod-search-input'); if(last) last.focus();
+  };
+  byId('addBonusBtn').addEventListener('click', ()=>{
+    byId('bonusSection').style.display = '';
+    if(STATE.saleDraft.bonusItems.length===0) addBonusRow();
+    else byId('bonusSection').scrollIntoView({behavior:'smooth', block:'center'});
+  });
+  byId('addBonusLineBtn').addEventListener('click', addBonusRow);
+  wireProductSearch(bonusBody, (rowId, productId)=>{
+    const row = STATE.saleDraft.bonusItems.find(it=>it.id==rowId); if(!row) return;
+    row.productId = productId;
+    const p = STATE.products.find(x=>x.id==productId);
+    if(p) row.unit = p.unit;
+    row.unitPrice = 0;
+    refreshBonus();
+  });
+  bonusBody.addEventListener('change', (e)=>{
+    const u = e.target.closest('[data-role="bunit"]'); if(!u) return;
+    const row = STATE.saleDraft.bonusItems.find(it=>it.id==u.dataset.row); if(!row) return;
+    row.unit = u.value; updateBonusLine(row.id);
+  });
+  bonusBody.addEventListener('input', (e)=>{
+    const q = e.target.closest('[data-role="bqty"]'); if(!q) return;
+    const row = STATE.saleDraft.bonusItems.find(it=>it.id==q.dataset.row); if(!row) return;
+    row.qty = parseFloat(q.value)||0; updateBonusLine(row.id);
+  });
+  bonusBody.addEventListener('click', (e)=>{
+    const rm = e.target.closest('[data-action="removeBonusLine"]'); if(!rm) return;
+    STATE.saleDraft.bonusItems = STATE.saleDraft.bonusItems.filter(it=>it.id!=rm.dataset.row);
+    refreshBonus();
+    if(STATE.saleDraft.bonusItems.length===0) byId('bonusSection').style.display = 'none';
+  });
   byId('saveSaleBtn').addEventListener('click', saveSale);
 }
 async function saveSale(){
   const items = STATE.saleDraft.items.filter(it=>it.productId && it.qty>0);
-  if(items.length===0){ toast('Add at least one item with a quantity','error'); return; }
+  const bonusDraft = (STATE.saleDraft.bonusItems||[]).filter(it=>it.productId && it.qty>0);
+  if(items.length===0 && bonusDraft.length===0){ toast('Add at least one item with a quantity','error'); return; }
   const orig = STATE.saleDraft.orig;
 
   // Compute the net BASE-unit stock change per affected product (kit sales move their
@@ -4009,7 +4116,7 @@ async function saveSale(){
       if(p) accumulateMovement(ledger, p, it.unit||p.unit, it.qty, +1);
     }
   }
-  for(const it of items){
+  for(const it of [...items, ...bonusDraft]){ // bonus items come off the stock exactly like sold items
     const p = STATE.products.find(x=>x.id==it.productId);
     if(p) accumulateMovement(ledger, p, it.unit||p.unit, it.qty, -1);
   }
@@ -4042,6 +4149,18 @@ async function saveSale(){
     return {productId:p.id, name:p.name, unit, baseUnit:p.unit, qty:Number(it.qty), baseQty: toBaseQty(p, unit, it.qty), unitPrice:Number(it.unitPrice), lineTotal:Number(it.qty)*Number(it.unitPrice)};
   });
 
+  // Bonus lines: always price 0. We keep what they normally sell for and what they cost, for Promotional Expenses.
+  const resolvedBonus = bonusDraft.map(it=>{
+    const p = STATE.products.find(x=>x.id==it.productId);
+    const unit = it.unit || p.unit;
+    const info = unitInfoFor(p, unit);
+    const refUnitPrice = Number(info? info.price : p.sellingPrice)||0;
+    const baseQty = toBaseQty(p, unit, it.qty);
+    return {productId:p.id, name:p.name, unit, baseUnit:p.unit, qty:Number(it.qty), baseQty,
+      unitPrice:0, lineTotal:0, bonus:true,
+      refUnitPrice, refValue:+(Number(it.qty)*refUnitPrice).toFixed(2), costValue:+(effectiveCostPerUnit(p)*baseQty).toFixed(2)};
+  });
+
   await applyMovementLedger(ledger);
 
   let invoiceNo = orig? orig.invoiceNo : null;
@@ -4055,7 +4174,7 @@ async function saveSale(){
   const rec = {
     id: orig? orig.id : undefined,
     branch: orig? (orig.branch||'main') : STATE.currentBranch,
-    invoiceNo, customerName, customerPhone, date, items: resolvedItems,
+    invoiceNo, customerName, customerPhone, date, items: [...resolvedItems, ...resolvedBonus],
     subtotal:t.subtotal, discountType:t.discType, discountValue:t.discVal, discount:t.discAmt,
     taxRate:t.taxRate, tax:t.taxAmt, deliveryFee, deliveryAddress, grandTotal:t.grandTotal,
     amountPaid:t.amountPaid, depositApplied: STATE.saleDraft.appliedDeposit? {...STATE.saleDraft.appliedDeposit} : null, balance:t.balance,
@@ -4252,7 +4371,7 @@ function invoiceHtml(s){
     <table>
       <thead><tr><th>Item</th><th class="right">Qty</th><th class="right">Unit Price</th><th class="right">Total</th></tr></thead>
       <tbody>
-        ${s.items.map(it=>`<tr><td>${esc(it.name)} <span class="hint">(${esc(it.unit)})</span></td><td class="right mono">${fmtNum(it.qty)}</td><td class="right mono">${money(it.unitPrice)}</td><td class="right mono">${money(it.lineTotal)}</td></tr>`).join('')}
+        ${s.items.map(it=>`<tr><td>${esc(it.name)} <span class="hint">(${esc(it.unit)})</span>${it.bonus? ' <span class="badge badge-ok">BONUS</span>' : ''}</td><td class="right mono">${fmtNum(it.qty)}</td><td class="right mono">${money(it.unitPrice)}</td><td class="right mono">${money(it.lineTotal)}</td></tr>`).join('')}
       </tbody>
     </table>
     </div>
@@ -4293,7 +4412,7 @@ function printInvoice(s){
     <hr>
     ${s.items.map(it=>`
       <div class="ritem">
-        <div>${esc(it.name)}</div>
+        <div>${esc(it.name)}${it.bonus? ' (BONUS)' : ''}</div>
         <div class="rline"><span>${fmtNum(it.qty)} ${esc(it.unit)} x ${money(it.unitPrice)}</span><span>${money(it.lineTotal)}</span></div>
       </div>`).join('')}
     <hr>
@@ -4732,11 +4851,13 @@ function renderReports(){
   const inRange = STATE.sales.filter(s=> inBranch(s) && s.status!=='void' && s.date>=from && s.date<=to);
   const revenue = inRange.reduce((a,s)=>a+Number(s.grandTotal||0),0);
   const itemsSold = inRange.reduce((a,s)=>a+s.items.reduce((x,it)=>{
+    if(it.bonus) return x; // free bonus items are not 'sold'
     const p = STATE.products.find(pp=>pp.id==it.productId);
     return x + itemBaseQty(it,p);
   },0),0);
   const estProfit = inRange.reduce((a,s)=>{
     return a + s.items.reduce((x,it)=>{
+      if(it.bonus) return x; // a bonus's cost is counted once, under Promotional Expenses
       const p = STATE.products.find(pp=>pp.id==it.productId);
       const cost = p? effectiveCostPerUnit(p) : 0;
       return x + (Number(it.lineTotal) - cost*itemBaseQty(it,p));
@@ -4748,7 +4869,9 @@ function renderReports(){
   const totalCashExpenditure = expInRange.reduce((a,x)=>a+Number(x.amount||0),0) + transInRange.reduce((a,x)=>a+Number(x.cost||0),0);
   const totalStockTransport = transInRange.reduce((a,x)=>a+Number(x.cost||0),0);
   const totalInternalUse = internalInRange.reduce((a,x)=>a+Number(x.totalValue||0),0);
-  const totalExpenditure = totalCashExpenditure + totalInternalUse;
+  const promoInRange = promoBonusRecords().filter(r=> r.date>=from && r.date<=to);
+  const totalPromo = promoInRange.reduce((a,r)=>a+r.costValue,0);
+  const totalExpenditure = totalCashExpenditure + totalInternalUse + totalPromo;
   const netProfit = estProfit - totalExpenditure;
   const suppliesInRange = STATE.supplies.filter(x=> inBranch(x) && x.date>=from && x.date<=to);
   const totalSupplies = suppliesInRange.reduce((a,x)=>a+Number(x.amount||0),0);
@@ -4756,10 +4879,12 @@ function renderReports(){
   expInRange.forEach(x=>{ expAgg[x.category] = (expAgg[x.category]||0) + Number(x.amount||0); });
   if(totalStockTransport>0) expAgg['Stock Transport (Goods Received)'] = totalStockTransport;
   if(totalInternalUse>0) expAgg['Internal / Personal Use'] = totalInternalUse;
+  if(totalPromo>0) expAgg['Promotional Expenses (Bonus Given)'] = totalPromo;
   const expByCategory = Object.entries(expAgg).sort((a,b)=>b[1]-a[1]);
   // top products
   const agg = {};
   inRange.forEach(s=> s.items.forEach(it=>{
+    if(it.bonus) return;
     const p = STATE.products.find(pp=>pp.id==it.productId);
     agg[it.productId] = agg[it.productId] || {name:it.name, qty:0, revenue:0};
     agg[it.productId].qty += itemBaseQty(it,p);
@@ -4796,7 +4921,7 @@ function renderReports(){
       <div class="card"><div class="label">Revenue</div><div class="value">${money(revenue)}</div><div class="sub">${inRange.length} invoice(s)</div></div>
       <div class="card"><div class="label">Items Sold</div><div class="value">${fmtNum(itemsSold)}</div></div>
       <div class="card"><div class="label">Gross Profit</div><div class="value ${estProfit>=0?'good':'bad'}">${money(estProfit)}</div><div class="sub">based on current cost prices</div></div>
-      <div class="card"><div class="label">Expenditure</div><div class="value warn">${money(totalExpenditure)}</div><div class="sub">${expInRange.length+transInRange.length+internalInRange.length} expense(s) in range</div></div>
+      <div class="card"><div class="label">Expenditure</div><div class="value warn">${money(totalExpenditure)}</div><div class="sub">${expInRange.length+transInRange.length+internalInRange.length+promoInRange.length} expense(s) in range</div></div>
       <div class="card"><div class="label">Net Profit</div><div class="value ${netProfit>=0?'good':'bad'}">${money(netProfit)}</div><div class="sub">gross profit minus expenditure</div></div>
       <div class="card"><div class="label">Purchases (Investment in Stock)</div><div class="value">${money(totalSupplies)}</div><div class="sub">${suppliesInRange.length} invoice(s) — not counted as an expense</div></div>
     </div>
@@ -4841,9 +4966,10 @@ function renderReports(){
    ============================================================ */
 let expFilter = {q:'', category:'', from:'', to:''};
 let transFilter = {q:'', from:'', to:''};
-let expTab = 'general'; // general | transport | deliveries | internal
+let expTab = 'general'; // general | transport | deliveries | internal | promo
 let deliveryFilter = {q:'', from:'', to:''};
 let internalFilter = {q:'', from:'', to:''};
+let promoFilter = {q:'', from:'', to:''};
 function expDefaultRange(){
   const now = new Date();
   return {
@@ -4872,6 +4998,80 @@ function internalDefaultRange(){
     to: internalFilter.to || todayStr()
   };
 }
+function promoDefaultRange(){
+  const now = new Date();
+  return {
+    from: promoFilter.from || new Date(now.getFullYear(), now.getMonth(),1).toISOString().slice(0,10),
+    to: promoFilter.to || todayStr()
+  };
+}
+function promoFilteredRows(){
+  const {from, to} = promoDefaultRange();
+  const q = (promoFilter.q||'').toLowerCase();
+  return promoBonusRecords().filter(r=>{
+    const matchQ = !q || ((r.productName||'')+(r.customer||'')+(r.invoiceNo||'')).toLowerCase().includes(q);
+    const matchD = (!from || r.date>=from) && (!to || r.date<=to);
+    return matchQ && matchD;
+  });
+}
+function renderPromotionalExpenses(){
+  const {from, to} = promoDefaultRange();
+  const all = promoBonusRecords();
+  const rows = promoFilteredRows();
+  const sum = (list,k)=> list.reduce((a,r)=>a+Number(r[k]||0),0);
+  const invoices = new Set(rows.map(r=>r.saleId)).size;
+  return `
+    <div class="help-box">🎁 Bonuses given to customers <b>in kind</b> (e.g. for buying up to a certain amount). They are added from <b>Sales → New Sale → 🎁 Bonus</b>, are priced <b>0.00</b> on the invoice, and appear here automatically with their normal product price. The <b>cost</b> of the bonus items is counted as an expense in Net Profit on the Reports page. To change or remove a bonus, edit or void the sale it belongs to.</div>
+    <div class="grid-cards">
+      <div class="card"><div class="label">Bonus Value at Product Price (filtered)</div><div class="value">${money(sum(rows,'refValue'))}</div><div class="sub">${rows.length} bonus item(s) on ${invoices} invoice(s)</div></div>
+      <div class="card"><div class="label">Cost of Bonuses (filtered)</div><div class="value warn">${money(sum(rows,'costValue'))}</div><div class="sub">counted as an expense in Net Profit</div></div>
+      <div class="card"><div class="label">All-Time Cost of Bonuses</div><div class="value">${money(sum(all,'costValue'))}</div><div class="sub">${all.length} bonus item(s) given</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-toolbar">
+        <input type="text" id="promoSearch" placeholder="Search product, customer, invoice..." style="max-width:250px" value="${esc(promoFilter.q)}">
+        <div class="field" style="margin:0"><label>From</label><input type="date" id="promo_from" value="${from}" style="width:auto"></div>
+        <div class="field" style="margin:0"><label>To</label><input type="date" id="promo_to" value="${to}" style="width:auto"></div>
+        <span style="flex:1"></span>
+        <button class="btn" id="exportPromoCsvBtn">⬇ Export CSV</button>
+      </div>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th>Bonus Product</th><th class="right">Qty</th><th class="right">Unit Price</th><th class="right">Value at Price</th><th class="right">Cost (Expense)</th><th></th></tr></thead>
+        <tbody>
+        ${rows.length? rows.map(r=>`
+          <tr>
+            <td>${fmtDate(r.date)}</td>
+            <td class="mono">${esc(r.invoiceNo||'—')}</td>
+            <td>${esc(r.customer)}</td>
+            <td>${esc(r.productName)}</td>
+            <td class="right mono">${fmtNum(r.qty)} ${esc(r.unit)}</td>
+            <td class="right mono">${money(r.refUnitPrice)}</td>
+            <td class="right mono">${money(r.refValue)}</td>
+            <td class="right mono">${money(r.costValue)}</td>
+            <td class="right"><button class="btn btn-sm" data-action="view-promo-sale" data-id="${r.saleId}">View Sale</button></td>
+          </tr>`).join('') + `
+          <tr style="font-weight:700"><td colspan="6" class="right">Total</td><td class="right mono">${money(sum(rows,'refValue'))}</td><td class="right mono">${money(sum(rows,'costValue'))}</td><td></td></tr>`
+          : `<tr class="empty-row"><td colspan="9">No bonuses found for this filter. Add one from Sales → New Sale → 🎁 Bonus.</td></tr>`}
+        </tbody>
+      </table>
+      </div>
+    </div>
+  `;
+}
+function renderPromoPartial(){ byId('view').innerHTML = renderExpenditure(); wireTabEvents(); }
+function exportPromoCsv(){
+  const {from, to} = promoDefaultRange();
+  const q = s=>`"${String(s==null?'':s).replace(/"/g,'""')}"`;
+  let csv = 'Date,Invoice,Customer,BonusProduct,Qty,Unit,UnitPrice,ValueAtPrice,CostExpense,ServedBy\n';
+  promoFilteredRows().forEach(r=>{
+    csv += [r.date, q(r.invoiceNo), q(r.customer), q(r.productName), r.qty, q(r.unit), r.refUnitPrice, r.refValue, r.costValue, q(r.servedBy)].join(',') + '\n';
+  });
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download = `elemawusi-ventures-promotional-expenses-${from}_to_${to}.csv`; a.click(); URL.revokeObjectURL(url);
+  toast('CSV exported');
+}
 function renderExpenditure(){
   const tabs = `
     <div class="tabbar">
@@ -4879,11 +5079,13 @@ function renderExpenditure(){
       <button class="tabbtn ${expTab==='transport'?'active':''}" data-etab="transport">Stock Transport (Goods Received)</button>
       <button class="tabbtn ${expTab==='deliveries'?'active':''}" data-etab="deliveries">Customer Deliveries</button>
       <button class="tabbtn ${expTab==='internal'?'active':''}" data-etab="internal">Internal / Personal Use</button>
+      <button class="tabbtn ${expTab==='promo'?'active':''}" data-etab="promo">Promotional Expenses</button>
     </div>`;
   return tabs + (
     expTab==='transport' ? renderStockTransport() :
     expTab==='deliveries' ? renderCustomerDeliveries() :
     expTab==='internal' ? renderInternalUse() :
+    expTab==='promo' ? renderPromotionalExpenses() :
     renderExpenditureGeneral()
   );
 }
@@ -5561,7 +5763,7 @@ async function buildReceiptEscPos(sale){
   if(sale.collectionStatus==='Pending Collection') text(`Collection: TO BE COLLECTED${sale.expectedCollectionDate?` (${fmtDate(sale.expectedCollectionDate)})`:''}\n`);
   text('--------------------------------\n');
   sale.items.forEach(it=>{
-    text(`${it.productName||it.name}\n`);
+    text(`${it.productName||it.name}${it.bonus?' (BONUS)':''}\n`);
     text(`  ${fmtNum(it.qty)} ${it.unit||''} x ${escPosMoney(it.unitPrice)} = ${escPosMoney(it.lineTotal!=null?it.lineTotal:it.qty*it.unitPrice)}\n`);
   });
   text('--------------------------------\n');
@@ -5617,7 +5819,7 @@ async function buildInvoiceEscPos(sale){
   if(sale.deliveryFee>0) text(`Delivery to: ${sale.deliveryAddress||'-'}\n`);
   text('--------------------------------\n');
   sale.items.forEach(it=>{
-    text(`${it.productName||it.name} (${it.unit||''})\n`);
+    text(`${it.productName||it.name} (${it.unit||''})${it.bonus?' (BONUS)':''}\n`);
     text(`  ${fmtNum(it.qty)} x ${escPosMoney(it.unitPrice)} = ${escPosMoney(it.lineTotal!=null?it.lineTotal:it.qty*it.unitPrice)}\n`);
   });
   text('--------------------------------\n');
@@ -6142,6 +6344,11 @@ function wireTabEvents(){
   const internalFrom = byId('internal_from'); if(internalFrom) internalFrom.addEventListener('change', (e)=>{internalFilter.from=e.target.value; renderInternalUsePartial();});
   const internalTo = byId('internal_to'); if(internalTo) internalTo.addEventListener('change', (e)=>{internalFilter.to=e.target.value; renderInternalUsePartial();});
   const exportInternalCsvBtn = byId('exportInternalCsvBtn'); if(exportInternalCsvBtn) exportInternalCsvBtn.addEventListener('click', exportInternalUseCsv);
+  const promoSearch = byId('promoSearch'); if(promoSearch) promoSearch.addEventListener('input', (e)=>{promoFilter.q=e.target.value; renderPromoPartial(); const el=byId('promoSearch'); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); }});
+  const promoFrom = byId('promo_from'); if(promoFrom) promoFrom.addEventListener('change', (e)=>{promoFilter.from=e.target.value; renderPromoPartial();});
+  const promoTo = byId('promo_to'); if(promoTo) promoTo.addEventListener('change', (e)=>{promoFilter.to=e.target.value; renderPromoPartial();});
+  const exportPromoCsvBtn = byId('exportPromoCsvBtn'); if(exportPromoCsvBtn) exportPromoCsvBtn.addEventListener('click', exportPromoCsv);
+  v.querySelectorAll('[data-action="view-promo-sale"]').forEach(b=>b.addEventListener('click', ()=>viewSale(b.dataset.id)));
 
   // Customer Deposits
   const addDepBtn = v.querySelector('[data-action="add-deposit"]'); if(addDepBtn) addDepBtn.addEventListener('click', openAddDeposit);
@@ -6739,7 +6946,7 @@ function exportExcelBackup(){
   const itemRows = [];
   STATE.sales.forEach(s=> s.items.forEach(it=>{
     itemRows.push({Branch: branchName(s.branch||'main'), Invoice:s.invoiceNo, Date:s.date, Customer:s.customerName||'Walk-in', Product:it.name, Unit:it.unit,
-      Qty:it.qty, UnitPrice:it.unitPrice, LineTotal:it.lineTotal, ServedBy:s.createdByName||'', Status: s.status==='void'?'Void':'Active'});
+      Qty:it.qty, UnitPrice:it.unitPrice, LineTotal:it.lineTotal, Bonus: it.bonus? 'Yes':'', ServedBy:s.createdByName||'', Status: s.status==='void'?'Void':'Active'});
   }));
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(itemRows), 'Sale Line Items');
 
