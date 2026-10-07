@@ -219,6 +219,41 @@ tbody tr:hover{background:var(--surface-2);}
 .prod-search-item:last-child{border-bottom:none;}
 .prod-search-item:hover,.prod-search-item.active{background:var(--primary-light);}
 .prod-search-empty{padding:8px 10px;color:var(--ink-faint);font-size:12.5px;}
+/* ---- Delivery town picker ---- */
+.town-picker{position:relative;}
+.town-picker .tp-input{width:100%;padding-left:38px;padding-right:42px;}
+.town-picker.open .tp-input{border-color:var(--primary);box-shadow:0 0 0 3px rgba(6,174,212,.18);}
+.tp-pin{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--primary-dark);display:flex;pointer-events:none;}
+.tp-toggle{position:absolute;right:5px;top:50%;transform:translateY(-50%);border:none;background:transparent;width:32px;height:32px;border-radius:8px;cursor:pointer;color:var(--ink-soft);display:flex;align-items:center;justify-content:center;}
+.tp-toggle:hover{background:var(--primary-light);color:var(--primary-dark);}
+.tp-toggle svg{transition:transform .18s ease;}
+.town-picker.open .tp-toggle svg{transform:rotate(180deg);}
+.town-panel{display:none;position:absolute;top:calc(100% + 6px);left:0;right:0;min-width:270px;z-index:80;background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:0 18px 40px -14px rgba(10,46,51,.35),0 4px 12px -4px rgba(10,46,51,.15);overflow:hidden;}
+.town-panel.show{display:block;animation:tpIn .14s ease-out;}
+@keyframes tpIn{from{opacity:0;transform:translateY(-6px) scale(.985);}to{opacity:1;transform:none;}}
+.tp-head{display:flex;justify-content:space-between;align-items:center;padding:9px 14px;background:linear-gradient(90deg,var(--primary-light),#fff);border-bottom:1px solid var(--border-soft);font-size:11.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--primary-dark);}
+.tp-count{background:var(--primary);color:#fff;border-radius:999px;padding:1px 9px;font-size:11px;letter-spacing:0;}
+.tp-list{max-height:250px;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:6px;}
+.tp-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;cursor:pointer;border-left:3px solid transparent;}
+.tp-item:hover,.tp-item.active{background:var(--primary-light);border-left-color:var(--primary);}
+.tp-dot{width:26px;height:26px;border-radius:50%;background:var(--border-soft);color:var(--primary-dark);display:flex;align-items:center;justify-content:center;flex:none;}
+.tp-item.active .tp-dot{background:var(--primary);color:#fff;}
+.tp-name{flex:1;font-size:14px;color:var(--ink);font-weight:500;line-height:1.25;}
+.tp-name mark{background:var(--hover-green);color:inherit;border-radius:3px;padding:0 1px;font-weight:700;}
+.tp-new{margin-left:7px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;background:var(--pink-light);color:var(--pink);border-radius:999px;padding:1px 7px;vertical-align:middle;}
+.tp-fee{font-family:var(--font-mono);font-size:12.5px;font-weight:600;border-radius:999px;padding:3px 10px;white-space:nowrap;}
+.tp-fee.low{background:var(--success-bg);color:var(--success);}
+.tp-fee.mid{background:var(--primary-light);color:var(--primary-dark);}
+.tp-fee.high{background:var(--warning-bg);color:var(--warning);}
+.tp-item.active .tp-fee{background:#fff;}
+.tp-empty{padding:20px 12px;text-align:center;color:var(--ink-faint);font-size:13px;}
+.tp-foot{display:flex;flex-direction:column;gap:4px;padding:8px;border-top:1px solid var(--border-soft);background:#FAFDFC;}
+.tp-add,.tp-manage{border:none;cursor:pointer;border-radius:10px;padding:9px 12px;font-size:13px;font-weight:600;text-align:left;font-family:inherit;}
+.tp-add{background:var(--primary);color:#fff;}
+.tp-add:hover{background:var(--primary-dark);}
+.tp-manage{background:transparent;color:var(--ink-soft);}
+.tp-manage:hover{background:var(--border-soft);color:var(--ink);}
+@media (max-width:480px){.tp-item{padding:11px 10px;}.tp-list{max-height:220px;}}
 
 /* modal */
 #modalRoot{position:fixed;inset:0;display:none;align-items:flex-start;justify-content:center;z-index:800;}
@@ -672,8 +707,103 @@ function deliveryTownFee(text){
   const hit = deliveryTowns().find(t=> normTownName(t.name)===k);
   return hit? hit.fee : null;
 }
-function deliveryTownOptionsHtml(){
-  return deliveryTowns().map(t=>`<option value="${esc(t.name)}" label="${esc(STATE.settings.currencySymbol)} ${t.fee}"></option>`).join('');
+const TP_PIN = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.6"/></svg>';
+const TP_CHEVRON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+let townPickerRefresh = null;
+// The Delivery Address box: a searchable dropdown of towns with their fees. The input keeps the id
+// s_delivery_addr, so saving, drafts and the automatic fee fill all work exactly as before.
+function townPickerHtml(value){
+  return `<div class="town-picker" id="townPicker">
+    <span class="tp-pin">${TP_PIN}</span>
+    <input type="text" id="s_delivery_addr" class="tp-input" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="townPanel" value="${esc(value||'')}" placeholder="Choose or type a town…">
+    <button type="button" class="tp-toggle" id="tpToggle" aria-label="Show delivery towns" tabindex="-1">${TP_CHEVRON}</button>
+    <div class="town-panel" id="townPanel" role="listbox"></div>
+  </div>`;
+}
+function wireTownPicker(){
+  const wrap = byId('townPicker'), input = byId('s_delivery_addr'), panel = byId('townPanel');
+  if(!wrap || !input || !panel) return;
+  const cur = STATE.settings.currencySymbol;
+  let items = [], active = -1, isOpen = false, picking = false;
+  const feeClass = f => f<=40 ? 'low' : (f<=100 ? 'mid' : 'high');
+  const highlight = (name, q)=>{
+    const i = q? name.toLowerCase().indexOf(q) : -1;
+    if(i<0) return esc(name);
+    return esc(name.slice(0,i)) + '<mark>' + esc(name.slice(i, i+q.length)) + '</mark>' + esc(name.slice(i+q.length));
+  };
+  const setOpen = (v)=>{
+    isOpen = v;
+    panel.classList.toggle('show', v);
+    wrap.classList.toggle('open', v);
+    input.setAttribute('aria-expanded', v? 'true':'false');
+  };
+  const scrollActive = ()=>{ const a = panel.querySelector('.tp-item.active'); if(a && a.scrollIntoView) a.scrollIntoView({block:'nearest'}); };
+  const render = (showAll)=>{
+    const raw = input.value.trim().replace(/\s+/g,' ');
+    const q = showAll? '' : raw.toLowerCase();
+    const all = deliveryTowns();
+    items = q
+      ? all.filter(t=> t.name.toLowerCase().includes(q)).sort((a,b)=>{
+          const as = a.name.toLowerCase().startsWith(q), bs = b.name.toLowerCase().startsWith(q);
+          return as===bs ? a.name.localeCompare(b.name) : (as? -1 : 1);
+        })
+      : all;
+    const exact = deliveryTownFee(raw)!==null;
+    active = items.length? 0 : -1;
+    if(showAll && exact){ const k = normTownName(raw); active = Math.max(0, items.findIndex(t=> normTownName(t.name)===k)); }
+    panel.innerHTML = `
+      <div class="tp-head"><span>Delivery towns</span><span class="tp-count">${q? items.length+' of '+all.length : all.length}</span></div>
+      <div class="tp-list">${items.length? items.map((t,i)=>`
+        <div class="tp-item ${i===active?'active':''}" role="option" data-i="${i}">
+          <span class="tp-dot">${TP_PIN}</span>
+          <span class="tp-name">${highlight(t.name,q)}${t.builtIn? '' : '<span class="tp-new">added</span>'}</span>
+          <span class="tp-fee ${feeClass(t.fee)}">${esc(cur)} ${t.fee}</span>
+        </div>`).join('') : `<div class="tp-empty">No town matches “${esc(raw)}”</div>`}</div>
+      <div class="tp-foot">
+        ${raw && !exact? `<button type="button" class="tp-add" data-act="add">＋ Add “${esc(raw)}” as a new town</button>` : ''}
+        <button type="button" class="tp-manage" data-act="manage">⚙ Manage towns &amp; fees</button>
+      </div>`;
+    setOpen(true);
+    scrollActive();
+  };
+  const pick = (t)=>{
+    picking = true;
+    input.value = t.name;
+    input.dispatchEvent(new Event('input', {bubbles:true})); // fills in the delivery fee
+    picking = false;
+    setOpen(false);
+  };
+  const move = (d)=>{
+    if(!items.length) return;
+    active = (active + d + items.length) % items.length;
+    panel.querySelectorAll('.tp-item').forEach((el,i)=> el.classList.toggle('active', i===active));
+    scrollActive();
+  };
+  const showFull = ()=>{ const raw = input.value.trim(); render(!raw || deliveryTownFee(raw)!==null); };
+  input.addEventListener('input', ()=>{ if(!picking) render(false); });
+  input.addEventListener('focus', showFull);
+  input.addEventListener('click', ()=>{ if(!isOpen) showFull(); });
+  input.addEventListener('keydown', (e)=>{
+    if(e.key==='ArrowDown'){ e.preventDefault(); if(!isOpen) showFull(); else move(1); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); if(isOpen) move(-1); }
+    else if(e.key==='Enter'){ if(isOpen && active>=0 && items[active]){ e.preventDefault(); pick(items[active]); } }
+    else if(e.key==='Escape'){ if(isOpen){ e.preventDefault(); setOpen(false); } }
+    else if(e.key==='Tab'){ setOpen(false); }
+  });
+  byId('tpToggle').addEventListener('click', ()=>{ if(isOpen) setOpen(false); else { input.focus(); showFull(); } });
+  panel.addEventListener('mousedown', (e)=> e.preventDefault()); // keep focus in the box while clicking inside the list
+  panel.addEventListener('click', (e)=>{
+    const item = e.target.closest('.tp-item');
+    if(item){ const t = items[Number(item.dataset.i)]; if(t) pick(t); return; }
+    const act = e.target.closest('[data-act]');
+    if(!act) return;
+    const typed = input.value.trim().replace(/\s+/g,' ');
+    setOpen(false);
+    if(act.dataset.act==='add') openDeliveryTownsModal(typed, parseFloat(byId('s_delivery').value)||'');
+    else openDeliveryTownsModal('', '');
+  });
+  document.addEventListener('click', (e)=>{ if(isOpen && !wrap.contains(e.target)) setOpen(false); });
+  townPickerRefresh = ()=>{ if(isOpen) render(false); };
 }
 async function setDeliveryTown(name, fee){
   const clean = String(name).trim().replace(/\s+/g,' '), k = normTownName(clean);
@@ -692,7 +822,7 @@ async function removeDeliveryTown(name){
 }
 // After any change: refresh the sale form's town list and re-apply the fee for the address typed there.
 function refreshDeliveryTownsUi(){
-  const dl = byId('deliveryTownList'); if(dl) dl.innerHTML = deliveryTownOptionsHtml();
+  if(townPickerRefresh) townPickerRefresh();
   const a = byId('s_delivery_addr'); if(a) a.dispatchEvent(new Event('input', {bubbles:true}));
 }
 function openDeliveryTownsModal(prefillName, prefillFee){
@@ -3868,8 +3998,7 @@ function renderSaleBuilder(){
         </div>
         <div class="field-row">
           <div class="field"><label>Delivery Fee (${esc(STATE.settings.currencySymbol)})</label><input type="number" min="0" step="0.01" id="s_delivery" value="${orig?.deliveryFee||0}" placeholder="0.00"></div>
-          <div class="field"><label>Delivery Address <span class="hint" style="font-weight:400">(pick a town — its fee fills in automatically)</span></label><input type="text" id="s_delivery_addr" list="deliveryTownList" autocomplete="off" value="${esc(orig?.deliveryAddress||'')}" placeholder="choose or type a town…">
-            <datalist id="deliveryTownList">${deliveryTownOptionsHtml()}</datalist>
+          <div class="field"><label>Delivery Address <span class="hint" style="font-weight:400">(pick a town — its fee fills in automatically)</span></label>${townPickerHtml(orig?.deliveryAddress)}
             <div class="hint" id="s_delivery_hint" style="margin-top:3px"></div>
             <button type="button" class="btn btn-sm" id="manageTownsBtn" style="margin-top:4px">＋ Add / edit towns &amp; fees</button></div>
         </div>
@@ -4202,6 +4331,7 @@ function wireSaleBuilderEvents(){
     if(e.target.closest('#quickAddTownBtn')) openDeliveryTownsModal(townInput.value.trim(), parseFloat(byId('s_delivery').value)||'');
   });
   byId('manageTownsBtn').addEventListener('click', ()=> openDeliveryTownsModal('', ''));
+  wireTownPicker();
   // ---- Bonus items: free, priced 0.00 ----
   const bonusBody = byId('bonusItemsBody');
   const refreshBonus = ()=>{ bonusBody.innerHTML = renderBonusRows(); };
