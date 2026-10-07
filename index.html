@@ -626,13 +626,129 @@ const LOGO_DATA_URI = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA
 const BRANCHES = {
   main: {id:'main', name:'Main Shop', momoOptions:[
     {label:'Main Shop ID — 511753', number:'511753', kind:'ID'},
-    {label:'Agent — 0598621772', number:'0598621772', kind:'Agent'}
+    {label:'Agent — 0598621772', number:'0598621772', kind:'Agent'},
+    {label:'Telecel — 0506331733', number:'0506331733', kind:'Telecel', network:'Telecel'}
   ]},
   annex: {id:'annex', name:'ELEMAWUSI ANNEX', momoOptions:[
     {label:'Annex ID — 486460', number:'486460', kind:'ID'},
-    {label:'Agent — 0598621772', number:'0598621772', kind:'Agent'}
+    {label:'Agent — 0598621772', number:'0598621772', kind:'Agent'},
+    {label:'Telecel — 0506331729', number:'0506331729', kind:'Telecel', network:'Telecel'}
   ]}
 };
+// Delivery towns and their delivery fees. Choosing (or typing) one of these in a sale's Delivery
+// Address fills in the Delivery Fee automatically. Edit this list to add towns or change fees.
+const DELIVERY_TOWNS = [
+  ['Adutor',40],['Bekpo',50],['Sonukpo',60],['Ahiatrogakope',80],['Blemazado',100],['Nyikutor',100],
+  ['Trekume',100],['Tregui',100],['Yorve',50],['Torzikpota',60],['Dalive',60],['Vetorkor',60],
+  ['Nutekpor',80],['Agorta',100],['Dzogborve',100],['Gamenu',100],['Apinkpo',100],['Galo',100],
+  ['Galosota',100],['Galotse',100],['Larve',60],['Lollito',40],['Agorome',40],['Wlorto',40],
+  ['Deme',30],['Abletorkope',100],['Atravenu',60],['Kpenu',60],['Nyinuto',50],['Hlortorto',50],
+  ['Agbatsivi',100],['Agortoe',100],['Sukladzi',100],['Dzato',150],['Akplorfudzi',150],['Aflorto',150],
+  ['Sokutime',60],['Klonu',100],['Bomigo',120],['Dabala',20],['Dabala Newtown',30],['Tsiveto',30],
+  ['Agbogbla',30],['Tosukpo',30],['Lakpo',40],['Agbakofe',50],['Hikpo',60],['Dabala Junction',30],
+  ['Alesikpe',40],['Hlevi',50],['Sogakope',60],['Detsaworme',60],['Besakofe',60],['Gordorkope',80],
+  ['Agorhome',40],['Gbenorkope',80],['Anlo',200],['Devegodo',120],['Devenu',120],['Gonu Agbokope',100],
+  ['Gonu Negbenu',80]
+];
+function normTownName(t){ return String(t||'').toLowerCase().replace(/\s+/g,' ').trim(); }
+// The list above is the built-in starting list. Towns added, re-priced or removed inside the app are
+// saved in Settings (settings.deliveryTownEdits) and layered on top of it, so they're shared by every
+// device and survive updates to this file.
+function deliveryTowns(){
+  const map = new Map();
+  DELIVERY_TOWNS.forEach(t=> map.set(normTownName(t[0]), {name:t[0], fee:t[1], builtIn:true}));
+  const edits = (STATE.settings && Array.isArray(STATE.settings.deliveryTownEdits)) ? STATE.settings.deliveryTownEdits : [];
+  edits.forEach(ed=>{
+    const k = normTownName(ed.name); if(!k) return;
+    if(ed.removed) map.delete(k);
+    else map.set(k, {name:String(ed.name).trim(), fee:Number(ed.fee)||0, builtIn: map.has(k)? map.get(k).builtIn : false});
+  });
+  return [...map.values()].sort((a,b)=> a.name.localeCompare(b.name));
+}
+// Returns the delivery fee for an exact town name (ignoring upper/lower case and extra spaces), or null.
+function deliveryTownFee(text){
+  const k = normTownName(text);
+  if(!k) return null;
+  const hit = deliveryTowns().find(t=> normTownName(t.name)===k);
+  return hit? hit.fee : null;
+}
+function deliveryTownOptionsHtml(){
+  return deliveryTowns().map(t=>`<option value="${esc(t.name)}" label="${esc(STATE.settings.currencySymbol)} ${t.fee}"></option>`).join('');
+}
+async function setDeliveryTown(name, fee){
+  const clean = String(name).trim().replace(/\s+/g,' '), k = normTownName(clean);
+  const edits = (STATE.settings.deliveryTownEdits||[]).filter(ed=> normTownName(ed.name)!==k);
+  const builtIn = DELIVERY_TOWNS.find(t=> normTownName(t[0])===k);
+  if(!(builtIn && builtIn[0]===clean && Number(builtIn[1])===Number(fee))) edits.push({name:clean, fee:Number(fee)});
+  STATE.settings.deliveryTownEdits = edits;
+  await putRec('settings', STATE.settings);
+}
+async function removeDeliveryTown(name){
+  const k = normTownName(name);
+  const edits = (STATE.settings.deliveryTownEdits||[]).filter(ed=> normTownName(ed.name)!==k);
+  if(DELIVERY_TOWNS.some(t=> normTownName(t[0])===k)) edits.push({name:String(name).trim(), removed:true});
+  STATE.settings.deliveryTownEdits = edits;
+  await putRec('settings', STATE.settings);
+}
+// After any change: refresh the sale form's town list and re-apply the fee for the address typed there.
+function refreshDeliveryTownsUi(){
+  const dl = byId('deliveryTownList'); if(dl) dl.innerHTML = deliveryTownOptionsHtml();
+  const a = byId('s_delivery_addr'); if(a) a.dispatchEvent(new Event('input', {bubbles:true}));
+}
+function openDeliveryTownsModal(prefillName, prefillFee){
+  const admin = canManageUnits();
+  const cur = STATE.settings.currencySymbol;
+  const rowsHtml = (q)=>{
+    const list = deliveryTowns().filter(t=> !q || t.name.toLowerCase().includes(q));
+    return list.length? list.map(t=>`
+      <tr data-town="${esc(t.name)}">
+        <td>${esc(t.name)}${t.builtIn? '' : ' <span class="badge badge-info">added</span>'}</td>
+        <td class="right"><input type="number" min="0" step="0.01" class="dt-fee" value="${t.fee}" style="width:90px" ${admin? '' : 'disabled'}></td>
+        <td class="right">${admin? `<button type="button" class="icon-btn dt-del" title="Remove this town">${iconTrash()}</button>` : ''}</td>
+      </tr>`).join('') : `<tr class="empty-row"><td colspan="3">No towns match.</td></tr>`;
+  };
+  const body = `
+    <p class="hint">Add a town that isn't on the list, with its delivery fee. From then on the fee fills in automatically whenever that town is chosen in a sale. ${admin? 'You can also change a fee or remove a town below.' : '(Only an admin can change or remove existing towns.)'}</p>
+    <div class="field-row" style="align-items:flex-end">
+      <div class="field"><label>Town / Area</label><input type="text" id="dt_name" value="${esc(prefillName||'')}" placeholder="e.g. Aflao" autocomplete="off"></div>
+      <div class="field"><label>Delivery Fee (${esc(cur)})</label><input type="number" min="0" step="0.01" id="dt_fee" value="${prefillFee||''}"></div>
+      <button type="button" class="btn btn-primary" id="dt_add" style="margin-bottom:10px">＋ Save Town</button>
+    </div>
+    <input type="text" id="dt_search" placeholder="Search ${deliveryTowns().length} towns…" style="margin:6px 0" autocomplete="off">
+    <div class="table-wrap" style="max-height:300px;overflow-y:auto">
+      <table><thead><tr><th>Town</th><th class="right">Fee (${esc(cur)})</th><th></th></tr></thead><tbody id="dt_rows">${rowsHtml('')}</tbody></table>
+    </div>`;
+  openModal('Delivery Towns & Fees', body, `<button class="btn" data-action="closeModal">Done</button>`, true);
+  const redraw = ()=>{ byId('dt_rows').innerHTML = rowsHtml((byId('dt_search').value||'').trim().toLowerCase()); };
+  byId('dt_add').addEventListener('click', async ()=>{
+    const name = byId('dt_name').value.trim().replace(/\s+/g,' ');
+    const fee = parseFloat(byId('dt_fee').value);
+    if(!name){ toast('Enter the town name','error'); return; }
+    if(!(fee>=0)){ toast('Enter the delivery fee for this town','error'); return; }
+    const exists = deliveryTowns().find(t=> normTownName(t.name)===normTownName(name));
+    if(exists && !admin){ toast(`"${exists.name}" is already on the list (${cur} ${exists.fee}) — only an admin can change an existing fee`,'error'); return; }
+    await setDeliveryTown(name, fee);
+    byId('dt_name').value=''; byId('dt_fee').value='';
+    redraw(); refreshDeliveryTownsUi();
+    toast(exists? `${name} updated to ${cur} ${fee}` : `${name} added with a delivery fee of ${cur} ${fee}`);
+  });
+  byId('dt_search').addEventListener('input', redraw);
+  const tbody = byId('dt_rows');
+  tbody.addEventListener('change', async (e)=>{
+    const inp = e.target.closest('.dt-fee'); if(!inp || !admin) return;
+    const name = inp.closest('tr').dataset.town; const fee = parseFloat(inp.value);
+    if(!(fee>=0)){ toast('Enter a valid fee','error'); redraw(); return; }
+    await setDeliveryTown(name, fee); refreshDeliveryTownsUi();
+    toast(`${name} fee updated to ${cur} ${fee}`);
+  });
+  tbody.addEventListener('click', async (e)=>{
+    const del = e.target.closest('.dt-del'); if(!del || !admin) return;
+    const name = del.closest('tr').dataset.town;
+    if(!confirm(`Remove "${name}" from the delivery towns list? Past sales are not affected.`)) return;
+    await removeDeliveryTown(name); redraw(); refreshDeliveryTownsUi();
+    toast(`${name} removed`);
+  });
+}
 let STATE = {
   products: [], sales: [], priceHistory: [], stockLog: [], expenditures: [], stockTransport: [], deliveries: [], internalUsage: [], settings: null, users: [], deposits: [], stockTransfers: [], supplies: [], customerCredit: [], returns: [], unitConversions: [], boms: [], activityLog: [],
   currentUser: null, // {username, fullName, role}
@@ -651,7 +767,7 @@ function momoOptionsFor(branchId){ return BRANCHES[branchId||'main']?.momoOption
 function momoOptionChoices(selected){
   const opts = momoOptionsFor(STATE.currentBranch);
   const selLabel = selected?.label || '';
-  return opts.map(o=>`<option value="${esc(o.label)}" ${o.label===selLabel?'selected':''}>${esc(o.label)} (MTN MoMo)</option>`).join('');
+  return opts.map(o=>`<option value="${esc(o.label)}" ${o.label===selLabel?'selected':''}>${esc(o.label)} (${esc(o.network||'MTN')} MoMo)</option>`).join('');
 }
 
 /* ---------------- Firestore-backed storage helpers ----------------
@@ -3744,7 +3860,7 @@ function renderSaleBuilder(){
         <div class="field" id="s_momoOptionWrap" style="${(orig?.paymentMethod==='Mobile Money'||orig?.paymentMethod==='Split (Cash + Mobile Money)')?'':'display:none'}">
           <label>Mobile Money — give this to the customer</label>
           <select id="s_momoOption">${momoOptionChoices(orig?.momoOption)}</select>
-          <p class="hint" style="margin-top:4px">All ${esc(branchName(STATE.currentBranch))} MoMo payments are MTN Mobile Money.</p>
+          <p class="hint" style="margin-top:4px">Choose the ${esc(branchName(STATE.currentBranch))} MoMo number the customer paid to (MTN or Telecel).</p>
         </div>
         <div class="field" style="margin-top:4px">
           <label>Customer Deposit</label>
@@ -3752,7 +3868,10 @@ function renderSaleBuilder(){
         </div>
         <div class="field-row">
           <div class="field"><label>Delivery Fee (${esc(STATE.settings.currencySymbol)})</label><input type="number" min="0" step="0.01" id="s_delivery" value="${orig?.deliveryFee||0}" placeholder="0.00"></div>
-          <div class="field"><label>Delivery Address</label><input type="text" id="s_delivery_addr" value="${esc(orig?.deliveryAddress||'')}" placeholder="required if a delivery fee is charged"></div>
+          <div class="field"><label>Delivery Address <span class="hint" style="font-weight:400">(pick a town — its fee fills in automatically)</span></label><input type="text" id="s_delivery_addr" list="deliveryTownList" autocomplete="off" value="${esc(orig?.deliveryAddress||'')}" placeholder="choose or type a town…">
+            <datalist id="deliveryTownList">${deliveryTownOptionsHtml()}</datalist>
+            <div class="hint" id="s_delivery_hint" style="margin-top:3px"></div>
+            <button type="button" class="btn btn-sm" id="manageTownsBtn" style="margin-top:4px">＋ Add / edit towns &amp; fees</button></div>
         </div>
         <div class="field"><label>Notes</label><textarea id="s_notes" rows="2">${esc(orig?.notes||'')}</textarea></div>
 
@@ -4060,6 +4179,29 @@ function wireSaleBuilderEvents(){
       toast(`${cp.name} added as its own line`);
     }
   });
+  // ---- Delivery town -> delivery fee (automatic) ----
+  const townInput = byId('s_delivery_addr');
+  const townHint = byId('s_delivery_hint');
+  const applyTownFee = ()=>{
+    const text = townInput.value.trim();
+    const fee = deliveryTownFee(text);
+    if(fee===null){
+      // Not a known town: offer to save it so its fee fills in automatically next time.
+      townHint.innerHTML = text.length>=2
+        ? `“${esc(text)}” isn't on the town list. <button type="button" class="btn btn-sm" id="quickAddTownBtn">＋ Save it as a town</button>`
+        : '';
+      return;
+    }
+    byId('s_delivery').value = fee;
+    townHint.textContent = `Delivery fee for ${text}: ${STATE.settings.currencySymbol} ${fee} (applied — you can still change it above)`;
+    renderTotalsBox();
+  };
+  townInput.addEventListener('input', applyTownFee);
+  townInput.addEventListener('change', applyTownFee);
+  townHint.addEventListener('click', (e)=>{
+    if(e.target.closest('#quickAddTownBtn')) openDeliveryTownsModal(townInput.value.trim(), parseFloat(byId('s_delivery').value)||'');
+  });
+  byId('manageTownsBtn').addEventListener('click', ()=> openDeliveryTownsModal('', ''));
   // ---- Bonus items: free, priced 0.00 ----
   const bonusBody = byId('bonusItemsBody');
   const refreshBonus = ()=>{ bonusBody.innerHTML = renderBonusRows(); };
@@ -4365,7 +4507,7 @@ function invoiceHtml(s){
     </div>
     <div class="invoice-parties">
       <div><div class="h">Billed To</div><div>${esc(s.customerName||'Walk-in Customer')}</div><div class="hint">${esc(s.customerPhone||'')}</div>${s.deliveryFee>0? `<div class="hint">Delivery to: ${esc(s.deliveryAddress||'—')}</div>`:''}</div>
-      <div style="text-align:right"><div class="h">Payment Method</div><div>${esc(s.paymentMethod||'—')}</div>${s.paymentSplit? `<div class="hint">Cash: ${money(s.paymentSplit.cash)} · Mobile Money: ${money(s.paymentSplit.momo)}</div>`:''}${s.momoOption? `<div class="hint">MoMo (MTN): ${esc(s.momoOption.label)}</div>`:''}</div>
+      <div style="text-align:right"><div class="h">Payment Method</div><div>${esc(s.paymentMethod||'—')}</div>${s.paymentSplit? `<div class="hint">Cash: ${money(s.paymentSplit.cash)} · Mobile Money: ${money(s.paymentSplit.momo)}</div>`:''}${s.momoOption? `<div class="hint">MoMo (${esc(s.momoOption.network||'MTN')}): ${esc(s.momoOption.label)}</div>`:''}</div>
     </div>
     <div class="table-wrap">
     <table>
@@ -4426,7 +4568,7 @@ function printInvoice(s){
     <div class="rline"><span>Balance</span><span>${money(s.balance)}</span></div>
     <div class="rline"><span>Payment</span><span>${esc(s.paymentMethod||'—')}</span></div>
     ${s.paymentSplit? `<div class="rline"><span>— Cash</span><span>${money(s.paymentSplit.cash)}</span></div><div class="rline"><span>— Mobile Money</span><span>${money(s.paymentSplit.momo)}</span></div>`:''}
-    ${s.momoOption? `<div class="rline"><span>MoMo (MTN)</span><span>${esc(s.momoOption.label)}</span></div>`:''}
+    ${s.momoOption? `<div class="rline"><span>MoMo (${esc(s.momoOption.network||'MTN')})</span><span>${esc(s.momoOption.label)}</span></div>`:''}
     <hr>
     <div class="rc-center">
       <div>Thank you for your business!</div>
