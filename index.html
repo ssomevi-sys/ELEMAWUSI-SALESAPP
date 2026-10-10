@@ -5115,7 +5115,7 @@ function renderPriceHistory(){
 }
 
 /* ============================================================
-   REP DAILY SALES  (administrators only)
+   REPS DAILY SALES  (administrators only)
    What each sales rep sold on a given day and how much of it was collected as cash / MoMo /
    other, so the admin can account for the cash a rep hands in at the end of the day.
    ============================================================ */
@@ -5198,7 +5198,7 @@ function renderRepSales(){
         <button class="btn btn-sm" data-rsrange="yesterday" style="align-self:flex-end">Yesterday</button>
         <button class="btn btn-sm" data-rsrange="week" style="align-self:flex-end">This Week</button>
         <button class="btn btn-sm" data-rsrange="month" style="align-self:flex-end">This Month</button>
-        <div class="field" style="margin:0"><label>Sales Rep</label>
+        <div class="field" style="margin:0"><label>Sales Reps</label>
           <select id="rs_rep" style="width:auto;min-width:170px">
             <option value="">All sales reps</option>
             ${repSalesStaffOptions().map(([k,n])=>`<option value="${esc(k)}" ${repSalesFilter.rep===k?'selected':''}>${esc(n)}${repRoleLabel(k)==='Admin'?' (Admin)':''}</option>`).join('')}
