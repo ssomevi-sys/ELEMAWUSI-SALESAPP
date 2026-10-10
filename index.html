@@ -1572,7 +1572,7 @@ function setActiveNav(tab){
 function openSidebar(){ byId('sidebar').classList.add('open'); byId('scrim').classList.add('show'); }
 function closeSidebar(){ byId('sidebar').classList.remove('open'); byId('scrim').classList.remove('show'); }
 
-const TITLES = {dashboard:'Dashboard', overview:'Combined Overview', inventory:'Inventory', supplies:'Purchases', transfers:'Stock Transfers', sales:'Sales', deposits:'Customer Deposits', credit:'Customer Credit', pricing:'Price Management', reports:'Reports', activity:'Activity Log', expenditure:'Expenditure', settings:'Settings', users:'Users', repsales:'Rep Daily Sales'};
+const TITLES = {dashboard:'Dashboard', overview:'Combined Overview', inventory:'Inventory', supplies:'Purchases', transfers:'Stock Transfers', sales:'Sales', deposits:'Customer Deposits', credit:'Customer Credit', pricing:'Price Management', reports:'Reports', activity:'Activity Log', expenditure:'Expenditure', settings:'Settings', users:'Users', repsales:' Daily Sales'};
 function navigate(tab){
   if(STATE.currentUser && STATE.currentUser.role==='sales_rep' && tab!=='sales' && tab!=='deposits' && tab!=='credit' && tab!=='transfers' && tab!=='settings' && tab!=='inventory') tab='sales';
   if(STATE.currentUser && STATE.currentUser.role==='admin' && !STATE.currentUser.isSuperAdmin && tab==='overview') tab='dashboard';
