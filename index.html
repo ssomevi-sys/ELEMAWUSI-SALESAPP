@@ -1511,6 +1511,7 @@ const NAV_ITEMS = [
   {tab:'credit', label:'Customer Credit', icon:'M4 4h16v12H4zM4 9h16M8 15v2M12 15v2'},
   {tab:'pricing', label:'Price Management', icon:'M20 12l-8 8-9-9V3h8l9 9z M7 7h.01'},
   {tab:'reports', label:'Reports', icon:'M4 20V10M11 20V4M18 20v-7', adminOnly:true},
+  {tab:'repsales', label:'Rep Daily Sales', icon:'M3 6h18v12H3z M12 15a3 3 0 100-6 3 3 0 000 6z M6 9h.01 M18 15h.01', adminOnly:true},
   {tab:'activity', label:'Activity Log', icon:'M12 8v4l3 3M12 2a10 10 0 100 20 10 10 0 000-20z', adminOnly:true},
   {tab:'expenditure', label:'Expenditure', icon:'M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6', adminOnly:true},
   {tab:'users', label:'Users', icon:'M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75', adminOnly:true},
@@ -1571,7 +1572,7 @@ function setActiveNav(tab){
 function openSidebar(){ byId('sidebar').classList.add('open'); byId('scrim').classList.add('show'); }
 function closeSidebar(){ byId('sidebar').classList.remove('open'); byId('scrim').classList.remove('show'); }
 
-const TITLES = {dashboard:'Dashboard', overview:'Combined Overview', inventory:'Inventory', supplies:'Purchases', transfers:'Stock Transfers', sales:'Sales', deposits:'Customer Deposits', credit:'Customer Credit', pricing:'Price Management', reports:'Reports', activity:'Activity Log', expenditure:'Expenditure', settings:'Settings', users:'Users'};
+const TITLES = {dashboard:'Dashboard', overview:'Combined Overview', inventory:'Inventory', supplies:'Purchases', transfers:'Stock Transfers', sales:'Sales', deposits:'Customer Deposits', credit:'Customer Credit', pricing:'Price Management', reports:'Reports', activity:'Activity Log', expenditure:'Expenditure', settings:'Settings', users:'Users', repsales:'Rep Daily Sales'};
 function navigate(tab){
   if(STATE.currentUser && STATE.currentUser.role==='sales_rep' && tab!=='sales' && tab!=='deposits' && tab!=='credit' && tab!=='transfers' && tab!=='settings' && tab!=='inventory') tab='sales';
   if(STATE.currentUser && STATE.currentUser.role==='admin' && !STATE.currentUser.isSuperAdmin && tab==='overview') tab='dashboard';
@@ -1598,6 +1599,7 @@ function render(){
   else if(STATE.tab==='expenditure') v.innerHTML = renderExpenditure();
   else if(STATE.tab==='settings') v.innerHTML = renderSettings();
   else if(STATE.tab==='users') v.innerHTML = renderUsers();
+  else if(STATE.tab==='repsales') v.innerHTML = renderRepSales();
   wireTabEvents();
   persistUiState();
 }
@@ -5113,6 +5115,219 @@ function renderPriceHistory(){
 }
 
 /* ============================================================
+   REP DAILY SALES  (administrators only)
+   What each sales rep sold on a given day and how much of it was collected as cash / MoMo /
+   other, so the admin can account for the cash a rep hands in at the end of the day.
+   ============================================================ */
+let repSalesFilter = {from:'', to:'', rep:''};
+function isAdminUser(){ return !!(STATE.currentUser && STATE.currentUser.role==='admin'); }
+function repSalesRange(){
+  let from = repSalesFilter.from || todayStr(), to = repSalesFilter.to || todayStr();
+  if(from>to){ const t=from; from=to; to=t; }
+  return {from, to};
+}
+function repKeyOf(s){ return s.createdBy || s.createdByName || 'unknown'; }
+function repRoleLabel(key){
+  const u = STATE.users.find(x=> x.username===key);
+  return u? (u.role==='admin'? 'Admin' : 'Sales Rep') : '';
+}
+// How a sale's payment splits into money the rep physically received. A deposit applied to a sale was
+// received earlier, and MoMo / bank / cheque never passes through the rep's hands, so only the
+// 'cash' figure is what the rep should hand over.
+function repSaleCollections(s){
+  const deposit = Number(s.depositApplied && s.depositApplied.amount)||0;
+  const manual = Math.max(0, (Number(s.amountPaid)||0) - deposit);
+  let cash=0, momo=0, other=0;
+  if(s.paymentSplit){ cash = Number(s.paymentSplit.cash)||0; momo = Number(s.paymentSplit.momo)||0; }
+  else if(s.paymentMethod==='Cash') cash = manual;
+  else if(s.paymentMethod==='Mobile Money') momo = manual;
+  else other = manual;
+  return {cash, momo, other, deposit};
+}
+function repSalesRows(){
+  const {from, to} = repSalesRange();
+  return STATE.sales
+    .filter(s=> inBranch(s) && s.status!=='void' && s.date>=from && s.date<=to && (!repSalesFilter.rep || repKeyOf(s)===repSalesFilter.rep))
+    .map(s=>{
+      const c = repSaleCollections(s);
+      return {s, key:repKeyOf(s), name:s.createdByName||s.createdBy||'Unknown', date:s.date,
+        total:Number(s.grandTotal)||0, cash:c.cash, momo:c.momo, other:c.other, deposit:c.deposit, balance:Math.max(0, Number(s.balance)||0)};
+    });
+}
+function repSum(rows){
+  return rows.reduce((a,r)=>({n:a.n+1, total:a.total+r.total, cash:a.cash+r.cash, momo:a.momo+r.momo, other:a.other+r.other, deposit:a.deposit+r.deposit, balance:a.balance+r.balance}),
+    {n:0, total:0, cash:0, momo:0, other:0, deposit:0, balance:0});
+}
+function repGroup(rows, keyFn){
+  const m = new Map();
+  rows.forEach(r=>{ const k = keyFn(r); if(!m.has(k)) m.set(k, []); m.get(k).push(r); });
+  return m;
+}
+function repSummaryByRep(rows){
+  return [...repGroup(rows, r=>r.key).entries()].map(([key,list])=>({key, name:list[0].name, role:repRoleLabel(key), ...repSum(list)}))
+    .sort((a,b)=> b.total-a.total || a.name.localeCompare(b.name));
+}
+function repDailyBreakdown(rows){
+  return [...repGroup(rows, r=>r.date+'||'+r.key).entries()].map(([k,list])=>({date:list[0].date, key:list[0].key, name:list[0].name, ...repSum(list)}))
+    .sort((a,b)=> String(b.date).localeCompare(String(a.date)) || a.name.localeCompare(b.name));
+}
+function repSalesStaffOptions(){
+  const m = new Map();
+  STATE.sales.filter(inBranch).forEach(s=>{ m.set(repKeyOf(s), s.createdByName||s.createdBy||'Unknown'); });
+  STATE.users.filter(u=> u.role==='sales_rep' && (u.branch||'main')===STATE.currentBranch).forEach(u=>{ if(!m.has(u.username)) m.set(u.username, u.fullName||u.username); });
+  return [...m.entries()].sort((a,b)=> a[1].localeCompare(b[1]));
+}
+function renderRepSales(){
+  if(!isAdminUser()){
+    return `<div class="help-box">🔒 This page is only available to administrators.</div>`;
+  }
+  const {from, to} = repSalesRange();
+  const rows = repSalesRows();
+  const tot = repSum(rows);
+  const byRep = repSummaryByRep(rows);
+  const daily = repDailyBreakdown(rows);
+  const voided = STATE.sales.filter(s=> inBranch(s) && s.status==='void' && s.date>=from && s.date<=to && (!repSalesFilter.rep || repKeyOf(s)===repSalesFilter.rep)).length;
+  const sameDay = from===to;
+  return `
+    <div class="help-box">🔒 <b>Administrators only.</b> See what each sales rep sold and how much each one should hand in. <b>Cash to hand in</b> is the cash actually received on their sales — it leaves out Mobile Money, bank/cheque payments and customer deposits applied, because those don't pass through the rep's hands. Voided invoices are not counted${voided? ` (${voided} voided in this period)` : ''}.</div>
+    <div class="panel">
+      <div class="panel-toolbar" style="flex-wrap:wrap;gap:8px">
+        <div class="field" style="margin:0"><label>From</label><input type="date" id="rs_from" value="${from}" style="width:auto"></div>
+        <div class="field" style="margin:0"><label>To</label><input type="date" id="rs_to" value="${to}" style="width:auto"></div>
+        <button class="btn btn-sm" data-rsrange="today" style="align-self:flex-end">Today</button>
+        <button class="btn btn-sm" data-rsrange="yesterday" style="align-self:flex-end">Yesterday</button>
+        <button class="btn btn-sm" data-rsrange="week" style="align-self:flex-end">This Week</button>
+        <button class="btn btn-sm" data-rsrange="month" style="align-self:flex-end">This Month</button>
+        <div class="field" style="margin:0"><label>Sales Rep</label>
+          <select id="rs_rep" style="width:auto;min-width:170px">
+            <option value="">All sales reps</option>
+            ${repSalesStaffOptions().map(([k,n])=>`<option value="${esc(k)}" ${repSalesFilter.rep===k?'selected':''}>${esc(n)}${repRoleLabel(k)==='Admin'?' (Admin)':''}</option>`).join('')}
+          </select>
+        </div>
+        <span style="flex:1"></span>
+        <button class="btn btn-primary" id="rs_export" style="align-self:flex-end">⬇ Export to Excel</button>
+      </div>
+    </div>
+    <div class="grid-cards">
+      <div class="card"><div class="label">Total Sales</div><div class="value">${money(tot.total)}</div><div class="sub">${tot.n} invoice(s) · ${sameDay? fmtDate(from) : fmtDate(from)+' – '+fmtDate(to)}</div></div>
+      <div class="card"><div class="label">Cash to Hand In</div><div class="value good">${money(tot.cash)}</div><div class="sub">cash received by the reps</div></div>
+      <div class="card"><div class="label">Mobile Money</div><div class="value">${money(tot.momo)}</div><div class="sub">paid straight to the shop MoMo</div></div>
+      <div class="card"><div class="label">Bank / Cheque / Other</div><div class="value">${money(tot.other)}</div><div class="sub">not cash in hand</div></div>
+      <div class="card"><div class="label">Deposits Applied</div><div class="value">${money(tot.deposit)}</div><div class="sub">paid earlier by customers</div></div>
+      <div class="card"><div class="label">Outstanding (Unpaid)</div><div class="value ${tot.balance>0?'warn':'good'}">${money(tot.balance)}</div><div class="sub">still owed on these sales</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>By Sales Rep</h3><span class="badge badge-muted">${byRep.length} rep(s)</span></div>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>Sales Rep</th><th class="right">Invoices</th><th class="right">Total Sales</th><th class="right">Cash to Hand In</th><th class="right">Mobile Money</th><th class="right">Bank/Other</th><th class="right">Deposit Applied</th><th class="right">Outstanding</th><th></th></tr></thead>
+        <tbody>
+        ${byRep.length? byRep.map(r=>`
+          <tr>
+            <td><b>${esc(r.name)}</b>${r.role==='Admin'? ' <span class="badge badge-muted">Admin</span>' : ''}</td>
+            <td class="right mono">${r.n}</td>
+            <td class="right mono">${money(r.total)}</td>
+            <td class="right mono" style="font-weight:700;color:var(--success)">${money(r.cash)}</td>
+            <td class="right mono">${money(r.momo)}</td>
+            <td class="right mono">${money(r.other)}</td>
+            <td class="right mono">${money(r.deposit)}</td>
+            <td class="right mono">${money(r.balance)}</td>
+            <td class="right"><button class="btn btn-sm" data-action="rs-view" data-rep="${esc(r.key)}">View Invoices</button></td>
+          </tr>`).join('') + `
+          <tr style="font-weight:700;background:var(--border-soft)"><td>Total</td><td class="right mono">${tot.n}</td><td class="right mono">${money(tot.total)}</td><td class="right mono">${money(tot.cash)}</td><td class="right mono">${money(tot.momo)}</td><td class="right mono">${money(tot.other)}</td><td class="right mono">${money(tot.deposit)}</td><td class="right mono">${money(tot.balance)}</td><td></td></tr>`
+          : `<tr class="empty-row"><td colspan="9">No sales recorded for this period${repSalesFilter.rep? ' by the selected rep' : ''}.</td></tr>`}
+        </tbody>
+      </table>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>Daily Breakdown</h3><span class="badge badge-muted">${daily.length} line(s)</span></div>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Sales Rep</th><th class="right">Invoices</th><th class="right">Total Sales</th><th class="right">Cash to Hand In</th><th class="right">Mobile Money</th><th class="right">Bank/Other</th><th class="right">Deposit Applied</th><th class="right">Outstanding</th><th></th></tr></thead>
+        <tbody>
+        ${daily.length? daily.map(r=>`
+          <tr>
+            <td style="white-space:nowrap">${fmtDate(r.date)}</td>
+            <td>${esc(r.name)}</td>
+            <td class="right mono">${r.n}</td>
+            <td class="right mono">${money(r.total)}</td>
+            <td class="right mono" style="font-weight:700;color:var(--success)">${money(r.cash)}</td>
+            <td class="right mono">${money(r.momo)}</td>
+            <td class="right mono">${money(r.other)}</td>
+            <td class="right mono">${money(r.deposit)}</td>
+            <td class="right mono">${money(r.balance)}</td>
+            <td class="right"><button class="btn btn-sm" data-action="rs-view" data-rep="${esc(r.key)}" data-date="${esc(r.date)}">Invoices</button></td>
+          </tr>`).join('') : `<tr class="empty-row"><td colspan="10">Nothing to show for this period.</td></tr>`}
+        </tbody>
+      </table>
+      </div>
+    </div>`;
+}
+function renderRepSalesPartial(){ byId('view').innerHTML = renderRepSales(); wireTabEvents(); }
+function setRepSalesQuickRange(kind){
+  const now = new Date(), iso = d=> new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,10);
+  let from = iso(now), to = iso(now);
+  if(kind==='yesterday'){ const y = new Date(now); y.setDate(y.getDate()-1); from = to = iso(y); }
+  else if(kind==='week'){ const w = new Date(now); const day = (w.getDay()+6)%7; w.setDate(w.getDate()-day); from = iso(w); }
+  else if(kind==='month'){ from = iso(new Date(now.getFullYear(), now.getMonth(), 1)); }
+  repSalesFilter.from = from; repSalesFilter.to = to;
+  renderRepSalesPartial();
+}
+function openRepInvoicesModal(key, date){
+  if(!isAdminUser()) return;
+  const {from, to} = repSalesRange();
+  const rows = repSalesRows().filter(r=> r.key===key && (!date || r.date===date))
+    .sort((a,b)=> String(a.date).localeCompare(String(b.date)) || String(a.s.createdAt||'').localeCompare(String(b.s.createdAt||'')));
+  const t = repSum(rows);
+  const who = rows.length? rows[0].name : key;
+  const when = date? fmtDate(date) : (from===to? fmtDate(from) : `${fmtDate(from)} – ${fmtDate(to)}`);
+  const timeOf = s=> s.createdAt? new Date(s.createdAt).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}) : '';
+  const body = `
+    <p class="hint">${esc(who)} — ${when} — ${t.n} invoice(s). Cash to hand in: <b>${money(t.cash)}</b></p>
+    <div class="table-wrap" style="max-height:60vh;overflow:auto">
+    <table>
+      <thead><tr><th>Date</th><th>Time</th><th>Invoice</th><th>Customer</th><th>Method</th><th class="right">Total</th><th class="right">Cash</th><th class="right">MoMo</th><th class="right">Other</th><th class="right">Deposit</th><th class="right">Balance</th></tr></thead>
+      <tbody>
+      ${rows.map(r=>`<tr>
+        <td style="white-space:nowrap">${fmtDate(r.date)}</td><td style="white-space:nowrap">${esc(timeOf(r.s))}</td><td class="mono">${esc(r.s.invoiceNo||'')}</td><td>${esc(r.s.customerName||'Walk-in')}</td><td>${esc(r.s.paymentMethod||'')}</td>
+        <td class="right mono">${money(r.total)}</td><td class="right mono">${money(r.cash)}</td><td class="right mono">${money(r.momo)}</td><td class="right mono">${money(r.other)}</td><td class="right mono">${money(r.deposit)}</td><td class="right mono">${money(r.balance)}</td>
+      </tr>`).join('') || `<tr class="empty-row"><td colspan="11">No invoices.</td></tr>`}
+      <tr style="font-weight:700;background:var(--border-soft)"><td colspan="5">Total</td><td class="right mono">${money(t.total)}</td><td class="right mono">${money(t.cash)}</td><td class="right mono">${money(t.momo)}</td><td class="right mono">${money(t.other)}</td><td class="right mono">${money(t.deposit)}</td><td class="right mono">${money(t.balance)}</td></tr>
+      </tbody>
+    </table>
+    </div>`;
+  openModal(`${who} — Invoices`, body, `<button class="btn" data-action="closeModal">Close</button>`, true);
+}
+function exportRepSalesExcel(){
+  if(!isAdminUser()) return;
+  const {from, to} = repSalesRange();
+  const rows = repSalesRows();
+  if(!rows.length){ toast('There are no sales in this period to export','error'); return; }
+  if(typeof XLSX === 'undefined'){ toast('Excel export needs an internet connection the first time — please try again when online','error'); return; }
+  const r2 = n=> +(Number(n)||0).toFixed(2);
+  const tot = repSum(rows);
+  const byRep = repSummaryByRep(rows), daily = repDailyBreakdown(rows);
+  const timeOf = s=> s.createdAt? new Date(s.createdAt).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}) : '';
+  const totalRow = (label, o)=> ({[label.key]:'TOTAL', ...label.blank, Invoices:o.n, 'Total Sales':r2(o.total), 'Cash To Hand In':r2(o.cash), 'Mobile Money':r2(o.momo), 'Bank / Other':r2(o.other), 'Deposit Applied':r2(o.deposit), Outstanding:r2(o.balance)});
+  const sumRows = byRep.map(r=>({'Sales Rep':r.name, Role:r.role, Invoices:r.n, 'Total Sales':r2(r.total), 'Cash To Hand In':r2(r.cash), 'Mobile Money':r2(r.momo), 'Bank / Other':r2(r.other), 'Deposit Applied':r2(r.deposit), Outstanding:r2(r.balance)}));
+  sumRows.push(totalRow({key:'Sales Rep', blank:{Role:''}}, tot));
+  const dayRows = daily.map(r=>({Date:r.date, 'Sales Rep':r.name, Invoices:r.n, 'Total Sales':r2(r.total), 'Cash To Hand In':r2(r.cash), 'Mobile Money':r2(r.momo), 'Bank / Other':r2(r.other), 'Deposit Applied':r2(r.deposit), Outstanding:r2(r.balance)}));
+  dayRows.push(totalRow({key:'Date', blank:{'Sales Rep':''}}, tot));
+  const invRows = rows.slice().sort((a,b)=> String(a.date).localeCompare(String(b.date)) || a.name.localeCompare(b.name) || String(a.s.createdAt||'').localeCompare(String(b.s.createdAt||'')))
+    .map(r=>({Date:r.date, Time:timeOf(r.s), Invoice:r.s.invoiceNo||'', 'Sales Rep':r.name, Customer:r.s.customerName||'Walk-in', Phone:r.s.customerPhone||'', 'Payment Method':r.s.paymentMethod||'',
+      'Grand Total':r2(r.total), Cash:r2(r.cash), 'Mobile Money':r2(r.momo), 'Bank / Other':r2(r.other), 'Deposit Applied':r2(r.deposit), Balance:r2(r.balance), 'Payment Status':r.s.paymentStatus||''}));
+  const wb = XLSX.utils.book_new();
+  const add = (data, name, widths)=>{ const ws = XLSX.utils.json_to_sheet(data); ws['!cols'] = widths.map(w=>({wch:w})); XLSX.utils.book_append_sheet(wb, ws, name); };
+  add(sumRows, 'Summary by Rep', [24,12,10,14,16,14,14,16,14]);
+  add(dayRows, 'Daily Breakdown', [14,24,10,14,16,14,14,16,14]);
+  add(invRows, 'Invoices', [12,9,14,24,24,15,22,14,12,14,14,16,12,14]);
+  const who = repSalesFilter.rep? (rows[0].name||'rep').replace(/[^A-Za-z0-9]+/g,'-') : 'all-reps';
+  XLSX.writeFile(wb, `elemawusi-rep-daily-sales-${branchName(STATE.currentBranch).replace(/[^A-Za-z0-9]+/g,'-')}-${who}-${from}_to_${to}.xlsx`);
+  toast('Rep sales exported to Excel');
+}
+
+/* ============================================================
    REPORTS
    ============================================================ */
 let reportRange = {from:'', to:''};
@@ -6621,6 +6836,14 @@ function wireTabEvents(){
   const promoTo = byId('promo_to'); if(promoTo) promoTo.addEventListener('change', (e)=>{promoFilter.to=e.target.value; renderPromoPartial();});
   const exportPromoCsvBtn = byId('exportPromoCsvBtn'); if(exportPromoCsvBtn) exportPromoCsvBtn.addEventListener('click', exportPromoCsv);
   v.querySelectorAll('[data-action="view-promo-sale"]').forEach(b=>b.addEventListener('click', ()=>viewSale(b.dataset.id)));
+
+  // Rep Daily Sales (admins only)
+  const rsFrom = byId('rs_from'); if(rsFrom) rsFrom.addEventListener('change', (e)=>{repSalesFilter.from=e.target.value; renderRepSalesPartial();});
+  const rsTo = byId('rs_to'); if(rsTo) rsTo.addEventListener('change', (e)=>{repSalesFilter.to=e.target.value; renderRepSalesPartial();});
+  const rsRep = byId('rs_rep'); if(rsRep) rsRep.addEventListener('change', (e)=>{repSalesFilter.rep=e.target.value; renderRepSalesPartial();});
+  v.querySelectorAll('[data-rsrange]').forEach(b=>b.addEventListener('click', ()=>setRepSalesQuickRange(b.dataset.rsrange)));
+  const rsExport = byId('rs_export'); if(rsExport) rsExport.addEventListener('click', exportRepSalesExcel);
+  v.querySelectorAll('[data-action="rs-view"]').forEach(b=>b.addEventListener('click', ()=>openRepInvoicesModal(b.dataset.rep, b.dataset.date||'')));
 
   // Customer Deposits
   const addDepBtn = v.querySelector('[data-action="add-deposit"]'); if(addDepBtn) addDepBtn.addEventListener('click', openAddDeposit);
